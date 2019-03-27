@@ -70,14 +70,15 @@ local openssl_pkey = require "openssl.pkey"
 local openssl_x509 = require "openssl.x509"
 local runloop = require "kong.runloop.handler"
 local mesh = require "kong.runloop.mesh"
+local semaphore = require "ngx.semaphore"
 local singletons = require "kong.singletons"
-local declarative = require "kong.db.declarative"
+local kong_cache = require "kong.cache"
 local ngx_balancer = require "ngx.balancer"
 local kong_resty_ctx = require "kong.resty.ctx"
 local certificate = require "kong.runloop.certificate"
-local concurrency = require "kong.concurrency"
 local plugins_iterator = require "kong.runloop.plugins_iterator"
 local balancer_execute = require("kong.runloop.balancer").execute
+local kong_cluster_events = require "kong.cluster_events"
 local kong_error_handlers = require "kong.error_handlers"
 
 local kong             = kong
@@ -110,25 +111,12 @@ local TLS_SCHEMES = {
 }
 
 local PLUGINS_MAP_CACHE_OPTS = { ttl = 0 }
-local PLUGINS_MAP_MUTEX_OPTS
 
-local declarative_entities
+local plugins_map_semaphore
 local plugins_map_version
 local configured_plugins
 local loaded_plugins
 local schema_state
-
-
-local function plugin_protocols_match_current_subsystem(plugin)
-  local current_subsystem = ngx.config.subsystem
-  local c = constants.PROTOCOLS_WITH_SUBSYSTEM
-  for _, protocol in ipairs(plugin.protocols) do
-    if c[protocol] == current_subsystem then
-      return true
-    end
-  end
-end
-
 
 local function build_plugins_map(db, version)
   local map = {}
@@ -138,9 +126,7 @@ local function build_plugins_map(db, version)
       return nil, err
     end
 
-    if plugin_protocols_match_current_subsystem(plugin) then
-      map[plugin.name] = true
-    end
+    map[plugin.name] = true
   end
 
   if version then
@@ -160,28 +146,43 @@ local function plugins_map_wrapper()
   end
 
   if plugins_map_version ~= version then
-    local ok, err = concurrency.with_coroutine_mutex(PLUGINS_MAP_MUTEX_OPTS,
-                                                     function()
-      -- we have the lock but we might not have needed it. check the
-      -- version again and rebuild if necessary
-      version, err = kong.cache:get("plugins_map:version",
-                                    PLUGINS_MAP_CACHE_OPTS, utils.uuid)
-      if err then
-        return nil, "failed to re-retrieve version: " .. err
-      end
+    local timeout = 60
+    if singletons.configuration.database == "cassandra" then
+      -- cassandra_timeout is defined in ms
+      timeout = singletons.configuration.cassandra_timeout / 1000
 
-      if plugins_map_version ~= version then
-        -- we have the lock and we need to rebuild the map
-        ngx_log(ngx_DEBUG, "rebuilding plugins map")
-
-        return build_plugins_map(kong.db, version)
-      end
-
-      return true
-    end)
-    if not ok then
-      return nil, "failed to rebuild plugins map: " .. err
+    elseif singletons.configuration.database == "postgres" then
+      -- pg_timeout is defined in ms
+      timeout = singletons.configuration.pg_timeout / 1000
     end
+
+    -- try to acquire the mutex (semaphore)
+    local ok, err = plugins_map_semaphore:wait(timeout)
+    if not ok then
+      return nil, "failed to acquire plugins map rebuild mutex: " .. err
+    end
+
+    -- we have the lock but we might not have needed it. check the
+    -- version again and rebuild if necessary
+    version, err = kong.cache:get("plugins_map:version",
+                                  PLUGINS_MAP_CACHE_OPTS, utils.uuid)
+    if err then
+      plugins_map_semaphore:post(1)
+      return nil, "failed to re-retrieve plugins map version: " .. err
+    end
+
+    if plugins_map_version ~= version then
+      -- we have the lock and we need to rebuild the map
+      ngx_log(ngx_DEBUG, "rebuilding plugins map")
+
+      local ok, err = build_plugins_map(kong.db, version)
+      if not ok then
+        plugins_map_semaphore:post(1)
+        return nil, "failed to rebuild plugins map: " .. err
+      end
+    end
+
+    plugins_map_semaphore:post(1)
   end
 
   return true
@@ -227,65 +228,6 @@ local function flush_delayed_response(ctx)
   kong.response.exit(ctx.delayed_response.status_code,
                      ctx.delayed_response.content,
                      ctx.delayed_response.headers)
-end
-
-
-local function parse_declarative_config(kong_config)
-  if not kong_config.database == "off" then
-    return {}
-  end
-
-  if not kong_config.declarative_config then
-    return {}
-  end
-
-  local dc = declarative.new_config(kong_config)
-  local entities, err = dc:parse_file(kong_config.declarative_config)
-  if not entities then
-    return nil, "error parsing declarative config file " ..
-                kong_config.declarative_config .. ":\n" .. err
-  end
-
-  return entities
-end
-
-
-local function load_declarative_config(kong_config, entities)
-  if not kong_config.database == "off" then
-    return true
-  end
-
-  if not kong_config.declarative_config then
-    -- no configuration yet, just build empty plugins map
-    build_plugins_map(kong.db, utils.uuid())
-    return true
-  end
-
-  local opts = {
-    name = "declarative_config",
-  }
-  return concurrency.with_worker_mutex(opts, function()
-    local value = ngx.shared.kong:get("declarative_config:loaded")
-    if value then
-      return true
-    end
-
-    local ok, err = declarative.load_into_cache(entities)
-    if not ok then
-      return nil, err
-    end
-
-    kong.log.notice("declarative config loaded from ",
-                    kong_config.declarative_config)
-
-    build_plugins_map(kong.db, utils.uuid())
-
-    assert(runloop.build_router(kong.db, "init"))
-
-    mesh.init()
-
-    return true
-  end)
 end
 
 
@@ -394,45 +336,24 @@ function Kong.init()
     certificate.init()
   end
 
-  if kong.configuration.database ~= "off" then
-    mesh.init()
-  end
+  mesh.init()
 
   -- Load plugins as late as possible so that everything is set up
   loaded_plugins = assert(db.plugins:load_plugin_schemas(config.loaded_plugins))
   sort_plugins_for_execution(config, db, loaded_plugins)
 
-  do
-    local timeout = 60
-    if kong.configuration.database == "cassandra" then
-      -- cassandra_timeout is defined in ms
-      timeout = kong.configuration.cassandra_timeout / 1000
-
-    elseif kong.configuration.database == "postgres" then
-      -- pg_timeout is defined in ms
-      timeout = kong.configuration.pg_timeout / 1000
-    end
-    PLUGINS_MAP_MUTEX_OPTS = {
-      name = "plugins_map",
-      timeout = timeout,
-    }
+  local err
+  plugins_map_semaphore, err = semaphore.new(1) -- 1 = treat this as a mutex
+  if not plugins_map_semaphore then
+    error("failed to create plugins map semaphore: " .. err)
   end
 
-  if kong.configuration.database == "off" then
-    local err
-    declarative_entities, err = parse_declarative_config(kong.configuration)
-    if not declarative_entities then
-      error(err)
-    end
-
-  else
-    local _, err = build_plugins_map(db, "init")
-    if err then
-      error("error building initial plugins map: " .. err)
-    end
-
-    assert(runloop.build_router(db, "init"))
+  local _, err = build_plugins_map(db, "init")
+  if err then
+    error("error building initial plugins map: ", err)
   end
+
+  assert(runloop.build_router(db, "init"))
 
   db:close()
 end
@@ -483,26 +404,60 @@ function Kong.init_worker()
     end
   end
 
-  local worker_events, err = kong_global.init_worker_events()
-  if not worker_events then
+
+  -- init inter-worker events
+
+
+  local worker_events = require "resty.worker.events"
+
+
+  local ok, err = worker_events.configure {
+    shm = "kong_process_events", -- defined by "lua_shared_dict"
+    timeout = 5,            -- life time of event data in shm
+    interval = 1,           -- poll interval (seconds)
+
+    wait_interval = 0.010,  -- wait before retry fetching event data
+    wait_max = 0.5,         -- max wait time before discarding event
+  }
+  if not ok then
     ngx_log(ngx_CRIT, "could not start inter-worker events: ", err)
     return
   end
-  kong.worker_events = worker_events
 
-  local cluster_events, err = kong_global.init_cluster_events(kong.configuration, kong.db)
+
+  -- init cluster_events
+
+
+  local cluster_events, err = kong_cluster_events.new {
+    db                      = kong.db,
+    poll_interval           = kong.configuration.db_update_frequency,
+    poll_offset             = kong.configuration.db_update_propagation,
+  }
   if not cluster_events then
     ngx_log(ngx_CRIT, "could not create cluster_events: ", err)
     return
   end
-  kong.cluster_events = cluster_events
 
-  local cache, err = kong_global.init_cache(kong.configuration, cluster_events, worker_events)
+
+  -- init cache
+
+
+  local cache, err = kong_cache.new {
+    cluster_events    = cluster_events,
+    worker_events     = worker_events,
+    propagation_delay = kong.configuration.db_update_propagation,
+    ttl               = kong.configuration.db_cache_ttl,
+    neg_ttl           = kong.configuration.db_cache_ttl,
+    resurrect_ttl     = kong.configuration.resurrect_ttl,
+    resty_lock_opts   = {
+      exptime = 10,
+      timeout = 5,
+    },
+  }
   if not cache then
     ngx_log(ngx_CRIT, "could not create kong cache: ", err)
     return
   end
-  kong.cache = cache
 
   local ok, err = cache:get("router:version", { ttl = 0 }, function()
     return "init"
@@ -520,19 +475,19 @@ function Kong.init_worker()
     return
   end
 
+
   -- LEGACY
   singletons.cache          = cache
   singletons.worker_events  = worker_events
   singletons.cluster_events = cluster_events
   -- /LEGACY
 
-  kong.db:set_events_handler(worker_events)
 
-  ok, err = load_declarative_config(kong.configuration, declarative_entities)
-  if not ok then
-    ngx_log(ngx_CRIT, "error loading declarative config file: ", err)
-    return
-  end
+  kong.cache = cache
+  kong.worker_events = worker_events
+  kong.cluster_events = cluster_events
+
+  kong.db:set_events_handler(worker_events)
 
 
   runloop.init_worker.before()
@@ -595,16 +550,17 @@ function Kong.balancer()
     -- Report HTTP status for health checks
     local balancer = balancer_data.balancer
     if balancer then
+      local ip, port = balancer_data.ip, balancer_data.port
+
       if previous_try.state == "failed" then
         if previous_try.code == 504 then
-          balancer.report_timeout(balancer_data.balancer_handle)
+          balancer.report_timeout(ip, port)
         else
-          balancer.report_tcp_failure(balancer_data.balancer_handle)
+          balancer.report_tcp_failure(ip, port)
         end
 
       else
-        balancer.report_http_status(balancer_data.balancer_handle,
-                                    previous_try.code)
+        balancer.report_http_status(ip, port, previous_try.code)
       end
     end
 

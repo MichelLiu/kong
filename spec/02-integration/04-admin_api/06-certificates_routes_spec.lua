@@ -301,7 +301,7 @@ describe("Admin API: #" .. strategy, function()
         assert.same({ "example.com" }, json.snis)
         json.snis = nil
 
-        local in_db = assert(db.certificates:select({ id = id }, { nulls = true }))
+        local in_db = assert(db.certificates:select({ id = id }))
         assert.same(json, in_db)
       end)
 
@@ -322,7 +322,7 @@ describe("Admin API: #" .. strategy, function()
         assert.same({ "example.com", "new-sni.com" }, json.snis)
         json.snis = nil
 
-        local in_db = assert(db.certificates:select({ id = json.id }, { nulls = true }))
+        local in_db = assert(db.certificates:select({ id = json.id }))
         assert.same(json, in_db)
       end)
 
@@ -340,7 +340,7 @@ describe("Admin API: #" .. strategy, function()
 
         json.snis = nil
 
-        local in_db = assert(db.certificates:select({ id = certificate.id }, { nulls = true }))
+        local in_db = assert(db.certificates:select({ id = certificate.id }))
         assert.same(json, in_db)
       end)
 
@@ -788,7 +788,7 @@ describe("Admin API: #" .. strategy, function()
         local json = cjson.decode(body)
         assert.same("created.com", json.name)
 
-        local in_db = assert(db.snis:select({ id = id }, { nulls = true }))
+        local in_db = assert(db.snis:select({ id = id }))
         assert.same(json, in_db)
       end)
 
@@ -805,7 +805,7 @@ describe("Admin API: #" .. strategy, function()
         local json = cjson.decode(body)
         assert.same("updated.com", json.name)
 
-        local in_db = assert(db.snis:select({ id = sni.id }, { nulls = true }))
+        local in_db = assert(db.snis:select({ id = sni.id }))
         assert.same(json, in_db)
       end)
 

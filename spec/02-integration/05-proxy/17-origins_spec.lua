@@ -4,19 +4,19 @@ describe("origins config option", function()
   local proxy_client
   local bp
 
-  lazy_setup(function()
+  before_each(function()
     bp = helpers.get_db_utils(nil, {
       "routes",
       "services",
     })
   end)
 
-  lazy_teardown(function()
+  after_each(function()
     if proxy_client then
       proxy_client:close()
     end
 
-    helpers.stop_kong(nil, true)
+    helpers.stop_kong()
   end)
 
   it("respects origins for overriding resolution", function()
@@ -41,9 +41,10 @@ describe("origins config option", function()
     })
     assert.res_status(502, res)
     proxy_client:close()
+    helpers.stop_kong(nil, nil, true)
 
     -- Now restart with origins option
-    assert(helpers.restart_kong({
+    assert(helpers.start_kong({
       nginx_conf = "spec/fixtures/custom_nginx.template",
       origins = string.format("%s://%s:%d=%s://%s:%d",
         helpers.mock_upstream_protocol,

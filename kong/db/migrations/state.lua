@@ -203,7 +203,7 @@ function State.load(db)
     return nil, prefix_err(db, err)
   end
 
-  local rows, err = db.connector:schema_migrations(subsystems)
+  local rows, err = db.connector:schema_migrations()
   if err then
     db.connector:close()
     return nil, prefix_err(db, "failed to check schema state: " .. err)

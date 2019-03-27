@@ -8,9 +8,6 @@ return {
       run_on = typedefs.run_on { default = "all" }
     },
     {
-      protocols = typedefs.protocols { default = {"http", "https", "tcp", "tls"} }
-    },
-    {
       config = {
         type = "record",
         fields = {

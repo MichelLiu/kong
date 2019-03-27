@@ -169,31 +169,6 @@ for _, strategy in helpers.each_strategy() do
         local json = cjson.decode(body)
         assert.same({ message = "No API key found in request" }, json)
       end)
-      it("returns Unauthorized on empty key header", function()
-        local res = assert(proxy_client:send {
-          method  = "GET",
-          path    = "/status/200",
-          headers = {
-            ["Host"] = "key-auth1.com",
-            ["apikey"] = "",
-          }
-        })
-        local body = assert.res_status(401, res)
-        local json = cjson.decode(body)
-        assert.same({ message = "No API key found in request" }, json)
-      end)
-      it("returns Unauthorized on empty key querystring", function()
-        local res = assert(proxy_client:send {
-          method  = "GET",
-          path    = "/status/200?apikey",
-          headers = {
-            ["Host"] = "key-auth1.com",
-          }
-        })
-        local body = assert.res_status(401, res)
-        local json = cjson.decode(body)
-        assert.same({ message = "No API key found in request" }, json)
-      end)
       it("returns WWW-Authenticate header on missing credentials", function()
         local res = assert(proxy_client:send {
           method  = "GET",
@@ -218,7 +193,7 @@ for _, strategy in helpers.each_strategy() do
         })
         assert.res_status(200, res)
       end)
-      it("returns 401 Unauthorized on invalid key", function()
+      it("returns 403 Forbidden on invalid key", function()
         local res = assert(proxy_client:send {
           method  = "GET",
           path    = "/status/200?apikey=123",
@@ -226,7 +201,7 @@ for _, strategy in helpers.each_strategy() do
             ["Host"] = "key-auth1.com"
           }
         })
-        local body = assert.res_status(401, res)
+        local body = assert.res_status(403, res)
         local json = cjson.decode(body)
         assert.same({ message = "Invalid authentication credentials" }, json)
       end)
@@ -260,7 +235,7 @@ for _, strategy in helpers.each_strategy() do
             })
             assert.res_status(200, res)
           end)
-          it("returns 401 Unauthorized on invalid key", function()
+          it("returns 403 Forbidden on invalid key", function()
             local res = assert(proxy_client:send {
               path    = "/status/200",
               headers = {
@@ -271,7 +246,7 @@ for _, strategy in helpers.each_strategy() do
                 apikey = "123",
               }
             })
-            local body = assert.res_status(401, res)
+            local body = assert.res_status(403, res)
             local json = cjson.decode(body)
             assert.same({ message = "Invalid authentication credentials" }, json)
           end)
@@ -312,7 +287,7 @@ for _, strategy in helpers.each_strategy() do
         })
         assert.res_status(200, res)
       end)
-      it("returns 401 Unauthorized on invalid key", function()
+      it("returns 403 Forbidden on invalid key", function()
         local res = assert(proxy_client:send {
           method  = "GET",
           path    = "/status/200",
@@ -321,7 +296,7 @@ for _, strategy in helpers.each_strategy() do
             ["apikey"] = "123"
           }
         })
-        local body = assert.res_status(401, res)
+        local body = assert.res_status(403, res)
         local json = cjson.decode(body)
         assert.same({ message = "Invalid authentication credentials" }, json)
       end)

@@ -76,7 +76,7 @@ local function bootstrap(schema_state, db, ttl)
   end
 
   if not ok then
-    log(NOT_LEADER_MSG)
+    log("nas:" .. NOT_LEADER_MSG)
   end
 end
 

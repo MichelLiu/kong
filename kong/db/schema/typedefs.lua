@@ -6,7 +6,6 @@ local openssl_x509 = require "openssl.x509"
 local iputils = require "resty.iputils"
 local Schema = require("kong.db.schema")
 local socket_url = require("socket.url")
-local constants = require "kong.constants"
 
 
 local match = string.match
@@ -158,7 +157,12 @@ typedefs.http_method = Schema.define {
 
 typedefs.protocol = Schema.define {
   type = "string",
-  one_of = constants.PROTOCOLS,
+  one_of = {
+    "http",
+    "https",
+    "tcp",
+    "tls",
+  }
 }
 
 
@@ -302,38 +306,6 @@ typedefs.run_on_first = Schema.define {
   one_of = { "first" },
 }
 
-typedefs.tag = Schema.define {
-  type = "string",
-  required = true, 
-  match = "^[%w%.%-%_~]+$",
-}
-
-typedefs.tags = Schema.define {
-  type = "set",
-  elements = typedefs.tag,
-}
-
-local http_protocols = {}
-for p, s in pairs(constants.PROTOCOLS_WITH_SUBSYSTEM) do
-  if s == "http" then
-    http_protocols[#http_protocols + 1] = p
-  end
-end
-table.sort(http_protocols)
-
-typedefs.protocols = Schema.define {
-  type = "set",
-  required = true,
-  default = http_protocols,
-  elements = typedefs.protocol,
-}
-
-typedefs.protocols_http = Schema.define {
-  type = "set",
-  required = true,
-  default = http_protocols,
-  elements = { type = "string", one_of = http_protocols },
-}
 
 setmetatable(typedefs, {
   __index = function(_, k)

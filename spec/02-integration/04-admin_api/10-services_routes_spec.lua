@@ -567,10 +567,6 @@ for _, strategy in helpers.each_strategy() do
         describe("PATCH", function()
           it("updates a plugin", function()
             local service = bp.services:insert()
-            bp.routes:insert({
-              service = { id = service.id },
-              hosts = { "example.test" },
-            })
             local plugin = bp.key_auth_plugins:insert({ service = service })
             local res = assert(client:send {
               method = "PATCH",
@@ -587,10 +583,6 @@ for _, strategy in helpers.each_strategy() do
           end)
           it("updates a plugin bis", function()
             local service = bp.services:insert()
-            bp.routes:insert({
-              service = { id = service.id },
-              hosts = { "example.test" },
-            })
             local plugin = bp.key_auth_plugins:insert({ service = service })
 
             plugin.enabled = not plugin.enabled
@@ -629,10 +621,6 @@ for _, strategy in helpers.each_strategy() do
           describe("errors", function()
             it("handles invalid input", function()
               local service = bp.services:insert()
-              bp.routes:insert({
-                service = { id = service.id },
-                hosts = { "example.test" },
-              })
               local plugin = bp.key_auth_plugins:insert({
                 service = service,
                 config = { key_names = { "testkey" } },

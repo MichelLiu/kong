@@ -112,4 +112,29 @@ return {
       );
     ]],
   },
+
+  mysql = {
+    up = [[
+      CREATE TABLE IF NOT EXISTS ratelimiting_metrics(
+        api_id varchar(50),
+        identifier varchar(200),
+        period varchar(100),
+        period_date timestamp  ,
+        `value` integer,
+        PRIMARY KEY (api_id, identifier, period_date, period)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8 ROW_FORMAT=DYNAMIC;
+
+      CREATE   FUNCTION increment_rate_limits(a_id varchar(50), i varchar(200), p varchar(100), p_date timestamp ,v integer) RETURNS INT  
+      BEGIN
+           IF EXISTS(SELECT * FROM ratelimiting_metrics WHERE api_id = a_id AND identifier = i AND period = p AND period_date = p_date ) THEN
+               UPDATE ratelimiting_metrics SET `value`=`value`+v WHERE api_id = a_id AND identifier = i AND period = p AND period_date = p_date;
+            ELSE
+               INSERT INTO ratelimiting_metrics(api_id, period, period_date, identifier, `value`) VALUES(a_id, p, p_date, i, v);
+            END IF;
+           RETURN 1;
+      END;
+
+      SELECT version();
+    ]],
+  }
 }

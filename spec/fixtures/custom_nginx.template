@@ -12,7 +12,6 @@ error_log logs/error.log ${{LOG_LEVEL}};
 events {}
 
 http {
-> if #proxy_listeners > 0 or #admin_listeners > 0 then
     charset UTF-8;
 
     error_log logs/error.log ${{LOG_LEVEL}};
@@ -62,7 +61,7 @@ http {
     lua_shared_dict kong_mock_upstream_loggers 10m;
 
 # injected nginx_http_* directives
-> for _, el in ipairs(nginx_http_directives) do
+> for _, el in ipairs(nginx_http_directives)  do
     $(el.name) $(el.value);
 > end
 
@@ -113,8 +112,8 @@ http {
         set_real_ip_from   $(trusted_ips[i]);
 > end
 
-        # injected nginx_proxy_* directives
-> for _, el in ipairs(nginx_proxy_directives) do
+    # injected nginx_proxy_* directives
+> for _, el in ipairs(nginx_proxy_directives)  do
         $(el.name) $(el.value);
 > end
 
@@ -208,8 +207,8 @@ http {
         ssl_protocols TLSv1.1 TLSv1.2 TLSv1.3;
 > end
 
-        # injected nginx_admin_* directives
-> for _, el in ipairs(nginx_admin_directives) do
+    # injected nginx_admin_* directives
+> for _, el in ipairs(nginx_admin_directives)  do
         $(el.name) $(el.value);
 > end
 
@@ -309,10 +308,8 @@ http {
                     valid_routes = {
                         ["/ws"]                         = "Websocket echo server",
                         ["/get"]                        = "Accepts a GET request and returns it in JSON format",
-                        ["/xml"]                        = "Returns a simple XML document",
                         ["/post"]                       = "Accepts a POST request and returns it in JSON format",
                         ["/response-headers?:key=:val"] = "Returns given response headers",
-                        ["/cache/:n"]                   = "Sets a Cache-Control header for n seconds",
                         ["/anything"]                   = "Accepts any request and returns it in JSON format",
                         ["/request"]                    = "Alias to /anything",
                         ["/delay/:duration"]            = "Delay the response for <duration> seconds",
@@ -342,19 +339,6 @@ http {
             }
         }
 
-        location /xml {
-            content_by_lua_block {
-                local mu = require "spec.fixtures.mock_upstream"
-                local xml = [[
-                  <?xml version="1.0" encoding="UTF-8"?>
-                    <note>
-                      <body>Kong, Monolith destroyer.</body>
-                    </note>
-                ]]
-                return mu.send_text_response(xml, "application/xml")
-            }
-        }
-
         location /post {
             access_by_lua_block {
                 local mu = require "spec.fixtures.mock_upstream"
@@ -374,15 +358,6 @@ http {
             content_by_lua_block {
                 local mu = require "spec.fixtures.mock_upstream"
                 return mu.send_default_json_response({}, ngx.req.get_uri_args())
-            }
-        }
-
-        location ~ "^/cache/(?<n>\d+)$" {
-            content_by_lua_block {
-                local mu = require "spec.fixtures.mock_upstream"
-                return mu.send_default_json_response({}, {
-                    ["Cache-Control"] = "public, max-age=" .. ngx.var.n,
-                })
             }
         }
 
@@ -479,11 +454,11 @@ http {
             }
         }
     }
-> end
 }
 
 > if #stream_listeners > 0 then
 stream {
+
     log_format basic '$remote_addr [$time_local] '
                      '$protocol $status $bytes_sent $bytes_received '
                      '$session_time';
@@ -503,10 +478,12 @@ stream {
 > end
     lua_shared_dict stream_prometheus_metrics  5m;
 
-    # injected nginx_stream_* directives
-> for _, el in ipairs(nginx_stream_directives) do
-    $(el.name) $(el.value);
-> end
+    upstream kong_upstream {
+        server 0.0.0.1:1;
+        balancer_by_lua_block {
+            Kong.balancer()
+        }
+    }
 
     init_by_lua_block {
         -- shared dictionaries conflict between stream/http modules. use a prefix.
@@ -530,13 +507,6 @@ stream {
         Kong.init_worker()
     }
 
-    upstream kong_upstream {
-        server 0.0.0.1:1;
-        balancer_by_lua_block {
-            Kong.balancer()
-        }
-    }
-
     server {
 > for i = 1, #stream_listeners do
         listen $(stream_listeners[i].listener);
@@ -545,23 +515,12 @@ stream {
         access_log logs/access.log basic;
         error_log logs/error.log debug;
 
-> for i = 1, #trusted_ips do
-        set_real_ip_from   $(trusted_ips[i]);
-> end
-
-        # injected nginx_sproxy_* directives
-> for _, el in ipairs(nginx_sproxy_directives) do
-        $(el.name) $(el.value);
-> end
-
 > if ssl_preread_enabled then
         ssl_preread on;
 > end
-
         preread_by_lua_block {
             Kong.preread()
         }
-
         proxy_pass kong_upstream;
 
         log_by_lua_block {
@@ -583,5 +542,6 @@ stream {
             ngx.say(data) -- echo whatever was sent
         }
     }
+
 }
 > end

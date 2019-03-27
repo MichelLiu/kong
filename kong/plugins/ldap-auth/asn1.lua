@@ -1,31 +1,22 @@
-local bpack, bunpack
-do
-  local string_pack = string.pack
-  local string_unpack = string.unpack
-  require "lua_pack"
-  bpack = string.pack
-  bunpack = string.unpack
-  -- luacheck: globals string.unpack
-  string.unpack = string_unpack
-  -- luacheck: globals string.pack
-  string.pack = string_pack
-end
+require "lua_pack"
 
 
 local setmetatable = setmetatable
 local tonumber = tonumber
+local bunpack = string.unpack
 local reverse = string.reverse
 local ipairs = ipairs
 local concat = table.concat
 local insert = table.insert
 local pairs = pairs
+local bpack = string.pack
 local math = math
 local type = type
 local char = string.char
 local bit = bit
 
 
-local _M = { bpack = bpack, bunpack = bunpack }
+local _M = {}
 
 
 _M.BERCLASS = {

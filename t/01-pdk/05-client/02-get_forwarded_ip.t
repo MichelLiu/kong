@@ -1,7 +1,6 @@
 use strict;
 use warnings FATAL => 'all';
 use Test::Nginx::Socket::Lua;
-use Test::Nginx::Socket::Lua::Stream;
 use t::Util;
 
 $ENV{TEST_NGINX_NXSOCK} ||= html_dir();
@@ -146,48 +145,7 @@ ip: 10.0.0.1
 
 
 
-=== TEST 5: client.get_forwarded_ip() returns client ip with proxy_protocol when trusted (stream)
---- stream_config eval
-qq{
-    server {
-        listen unix:$ENV{TEST_NGINX_NXSOCK}/nginx.sock proxy_protocol;
-
-        set_real_ip_from 0.0.0.0/0;
-        set_real_ip_from ::/0;
-        set_real_ip_from unix:;
-
-        content_by_lua_block {
-            require "resty.core"
-
-            local PDK = require "kong.pdk"
-            local pdk = PDK.new()
-
-            ngx.say("ip: ", pdk.client.get_forwarded_ip())
-        }
-    }
-}
---- stream_server_config
-    content_by_lua_block {
-        local sock = ngx.socket.tcp()
-        sock:connect("unix:$TEST_NGINX_NXSOCK/nginx.sock")
-
-        local request = "PROXY TCP4 10.0.0.1 " ..
-                        ngx.var.server_addr    .. " " ..
-                        ngx.var.remote_port    .. " " ..
-                        ngx.var.server_port    .. "\r\n" ..
-                        "Hello!\r\n"
-
-        sock:send(request)
-        ngx.print(sock:receive())
-    }
---- stream_response chop
-ip: 10.0.0.1
---- no_error_log
-[error]
-
-
-
-=== TEST 6: client.get_forwarded_ip() returns client ip from last hop with X-Real-IP header when not trusted
+=== TEST 5: client.get_forwarded_ip() returns client ip from last hop with X-Real-IP header when not trusted
 --- http_config eval: $t::Util::HttpConfig
 --- config
     location = /t {
@@ -211,7 +169,7 @@ ip: 127.0.0.1
 
 
 
-=== TEST 7: client.get_forwarded_ip() returns client ip from last hop with X-Forwarded-For header when not trusted
+=== TEST 6: client.get_forwarded_ip() returns client ip from last hop with X-Forwarded-For header when not trusted
 --- http_config eval: $t::Util::HttpConfig
 --- config
     location = /t {
@@ -235,7 +193,7 @@ ip: 127.0.0.1
 
 
 
-=== TEST 8: client.get_forwarded_ip() returns client ip from last hop with X-Forwarded-For header with port when not trusted
+=== TEST 7: client.get_forwarded_ip() returns client ip from last hop with X-Forwarded-For header with port when not trusted
 --- http_config eval: $t::Util::HttpConfig
 --- config
     location = /t {
@@ -259,7 +217,7 @@ ip: 127.0.0.1
 
 
 
-=== TEST 9: client.get_forwarded_ip() returns client ip from last hop with proxy_protocol when not trusted
+=== TEST 8: client.get_forwarded_ip() returns client ip from last hop with proxy_protocol when not trusted
 --- http_config eval
 qq{
     $t::Util::HttpConfig
@@ -299,43 +257,6 @@ qq{
 --- request
 GET /t
 --- response_body
-ip: unix:
---- no_error_log
-[error]
-
-
-
-=== TEST 10: client.get_forwarded_ip() returns client ip from last hop with proxy_protocol when not trusted (stream)
---- stream_config eval
-qq{
-    server {
-        listen unix:$ENV{TEST_NGINX_NXSOCK}/nginx.sock proxy_protocol;
-
-        content_by_lua_block {
-            require "resty.core"
-
-            local PDK = require "kong.pdk"
-            local pdk = PDK.new()
-
-            ngx.say("ip: ", pdk.client.get_forwarded_ip())
-        }
-    }
-}
---- stream_server_config
-    content_by_lua_block {
-        local sock = ngx.socket.tcp()
-        sock:connect("unix:$TEST_NGINX_NXSOCK/nginx.sock")
-
-        local request = "PROXY TCP4 10.0.0.1 " ..
-                        ngx.var.server_addr    .. " " ..
-                        ngx.var.remote_port    .. " " ..
-                        ngx.var.server_port    .. "\r\n" ..
-                        "Hello!\r\n"
-
-        sock:send(request)
-        ngx.print(sock:receive())
-    }
---- stream_response chop
 ip: unix:
 --- no_error_log
 [error]

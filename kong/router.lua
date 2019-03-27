@@ -7,13 +7,13 @@ local bit           = require "bit"
 local hostname_type = utils.hostname_type
 local re_match      = ngx.re.match
 local re_find       = ngx.re.find
+local null          = ngx.null
 local insert        = table.insert
 local sort          = table.sort
 local upper         = string.upper
 local lower         = string.lower
 local find          = string.find
 local sub           = string.sub
-local tonumber      = tonumber
 local ipairs        = ipairs
 local pairs         = pairs
 local error         = error
@@ -68,9 +68,6 @@ local MATCH_RULES = {
 }
 
 
-local EMPTY_T = {}
-
-
 local match_route
 local reduce
 
@@ -92,22 +89,18 @@ local protocol_subsystem = {
 }
 
 local function marshall_route(r)
-  local route        = r.route
-  local service      = r.service
-  local headers      = r.headers
-  local paths        = route.paths
-  local methods      = route.methods
-  local snis         = route.snis
-  local sources      = route.sources
-  local destinations = route.destinations
+  local route    = r.route          or null
+  local service  = r.service        or null
+  local headers  = r.headers        or null
+  local paths    = route.paths      or null
+  local methods  = route.methods    or null
+  local protocol = service.protocol or null
+  local sources  = route.sources  or null
+  local destinations = route.destinations or null
+  local snis     = route.snis or null
 
-
-  local protocol
-  if service then
-    protocol = service.protocol
-  end
-
-  if not (headers or methods or paths or snis or sources or destinations) then
+  if not (headers ~= null or methods ~= null or paths ~= null or
+          sources ~= null or destinations ~= null or snis ~= null) then
     return nil, "could not categorize route"
   end
 
@@ -132,7 +125,7 @@ local function marshall_route(r)
   -- headers
 
 
-  if headers then
+  if headers ~= null then
     if type(headers) ~= "table" then
       return nil, "headers field must be a table"
     end
@@ -181,7 +174,7 @@ local function marshall_route(r)
   -- paths
 
 
-  if paths then
+  if paths ~= null then
     if type(paths) ~= "table" then
       return nil, "paths field must be a table"
     end
@@ -226,7 +219,7 @@ local function marshall_route(r)
   -- methods
 
 
-  if methods then
+  if methods ~= null then
     if type(methods) ~= "table" then
       return nil, "methods field must be a table"
     end
@@ -245,7 +238,7 @@ local function marshall_route(r)
   -- sources
 
 
-  if sources then
+  if sources ~= null then
     if type(sources) ~= "table" then
       return nil, "sources field must be a table"
     end
@@ -278,7 +271,7 @@ local function marshall_route(r)
   -- destinations
 
 
-  if destinations then
+  if destinations ~= null then
     if type(destinations) ~= "table" then
       return nil, "destinations field must be a table"
     end
@@ -311,7 +304,7 @@ local function marshall_route(r)
   -- snis
 
 
-  if snis then
+  if snis ~= null then
     if type(snis) ~= "table" then
       return nil, "snis field must be a table"
     end
@@ -330,17 +323,16 @@ local function marshall_route(r)
   end
 
 
-  -- upstream_url parsing
-
-
-  if protocol then
+  if protocol ~= null then
     route_t.upstream_url_t.scheme = protocol
   end
 
-  local s = service or EMPTY_T
 
-  local host = s.host
-  if host then
+  -- upstream_url parsing
+
+
+  local host = service.host or null
+  if host ~= null then
     route_t.upstream_url_t.host = host
     route_t.upstream_url_t.type = hostname_type(host)
 
@@ -348,8 +340,8 @@ local function marshall_route(r)
     route_t.upstream_url_t.type = hostname_type("")
   end
 
-  local port = s.port
-  if port then
+  local port = service.port or null
+  if port ~= null then
     route_t.upstream_url_t.port = port
 
   else
@@ -362,7 +354,7 @@ local function marshall_route(r)
   end
 
   if route_t.type == "http" then
-    route_t.upstream_url_t.path = s.path or "/"
+    route_t.upstream_url_t.path = service.path or "/"
   end
 
   return route_t
@@ -1135,13 +1127,14 @@ function _M.new(routes)
             local upstream_url_t = matched_route.upstream_url_t
             local matches        = ctx.matches
 
+
             -- Path construction
 
             if matched_route.type == "http" then
               -- if we do not have a path-match, then the postfix is simply the
               -- incoming path, without the initial slash
               local request_postfix = matches.uri_postfix or sub(req_uri, 2, -1)
-              local upstream_base = upstream_url_t.path or "/"
+              local upstream_base = upstream_url_t.path
 
               if matched_route.strip_uri then
                 -- we drop the matched part, replacing it with the upstream path
@@ -1234,24 +1227,11 @@ function _M.new(routes)
       -- debug HTTP request header logic
 
       if ngx.var.http_kong_debug then
-        if match_t.route then
-          if match_t.route.id then
-            ngx.header["Kong-Route-Id"] = match_t.route.id
-          end
+        ngx.header["Kong-Route-Id"]   = match_t.route.id
+        ngx.header["Kong-Service-Id"] = match_t.service.id
 
-          if match_t.route.name then
-            ngx.header["Kong-Route-Name"] = match_t.route.name
-          end
-        end
-
-        if match_t.service then
-          if match_t.service.id then
-            ngx.header["Kong-Service-Id"] = match_t.service.id
-          end
-
-          if match_t.service.name then
-            ngx.header["Kong-Service-Name"] = match_t.service.name
-          end
+        if match_t.service.name then
+          ngx.header["Kong-Service-Name"] = match_t.service.name
         end
       end
 

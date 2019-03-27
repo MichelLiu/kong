@@ -11,8 +11,7 @@ else
 OPENSSL_DIR ?= /usr
 endif
 
-.PHONY: install remove dependencies dev \
-	lint test test-integration test-plugins test-all fix-windows
+.PHONY: install dev lint test test-integration test-plugins test-all fix-windows
 
 KONG_GMP_VERSION ?= `grep KONG_GMP_VERSION .requirements | awk -F"=" '{print $$2}'`
 RESTY_VERSION ?= `grep RESTY_VERSION .requirements | awk -F"=" '{print $$2}'`
@@ -27,15 +26,9 @@ setup-release:
 	then git pull; \
 	else git clone https://github.com/Kong/kong-build-tools.git; fi
 	cd kong-build-tools; \
-	git fetch; \
-	git reset --hard origin/$(KONG_BUILD_TOOLS); \
-	make setup_tests
-
-functional_tests: setup-release
+	git reset --hard $$KONG_BUILD_TOOLS;
 	cd kong-build-tools; \
-	export KONG_SOURCE_LOCATION=`pwd`/../ && \
-	make package-kong && \
-	make test
+	make setup_tests
 
 nightly-release: setup-release
 	sed -i -e '/return string\.format/,/\"\")/c\return "$(KONG_VERSION)\"' kong/meta.lua && \
@@ -53,10 +46,9 @@ release: setup-release
 install:
 	@luarocks make OPENSSL_DIR=$(OPENSSL_DIR) CRYPTO_DIR=$(OPENSSL_DIR)
 
-remove:
+dev:
 	-@luarocks remove kong
-
-dependencies:
+	@luarocks make OPENSSL_DIR=$(OPENSSL_DIR) CRYPTO_DIR=$(OPENSSL_DIR)
 	@for rock in $(DEV_ROCKS) ; do \
 	  if luarocks list --porcelain $$rock | grep -q "installed" ; then \
 	    echo $$rock already installed, skipping ; \
@@ -65,8 +57,6 @@ dependencies:
 	    luarocks install $$rock OPENSSL_DIR=$(OPENSSL_DIR) CRYPTO_DIR=$(OPENSSL_DIR); \
 	  fi \
 	done;
-
-dev: remove install dependencies
 
 lint:
 	@luacheck -q .

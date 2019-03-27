@@ -113,7 +113,7 @@ our $HttpConfig = <<_EOC_;
                     expected = true
                 end
 
-                local ok1, err1 = pcall(fn, unpack(fdata.args or {}))
+                local ok1, err1 = pcall(fn, unpack(fdata.args))
 
                 if ok1 ~= expected then
                     local errmsg = ""
@@ -142,7 +142,7 @@ our $HttpConfig = <<_EOC_;
                 end
 
                 ---[[
-                local ok2, err2 = pcall(fn, unpack(fdata.args or {}))
+                local ok2, err2 = pcall(fn, unpack(fdata.args))
 
                 if ok1 then
                     -- succeeded without phase checking,

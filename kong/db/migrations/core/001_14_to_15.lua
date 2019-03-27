@@ -386,4 +386,9 @@ return {
       assert(connector:query("DROP TABLE IF EXISTS schema_migrations"))
     end,
   },
+
+  mysql = {
+    up = [[
+    ]],
+  },
 }

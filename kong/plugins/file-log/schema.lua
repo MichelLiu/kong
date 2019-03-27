@@ -1,6 +1,5 @@
 local pl_file = require "pl.file"
 local pl_path = require "pl.path"
-local typedefs = require "kong.db.schema.typedefs"
 
 local function validate_file(value)
   -- create file in case it doesn't exist
@@ -17,7 +16,6 @@ end
 return {
   name = "file-log",
   fields = {
-    { protocols = typedefs.protocols_http },
     { config = {
         type = "record",
         fields = {

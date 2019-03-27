@@ -83,11 +83,6 @@ local function new_db_on_error(self)
     return kong.response.exit(404, err)
   end
 
-  if err.code == Errors.codes.OPERATION_UNSUPPORTED then
-    kong.log.err(err)
-    return kong.response.exit(405, err)
-  end
-
   if err.code == Errors.codes.PRIMARY_KEY_VIOLATION
   or err.code == Errors.codes.UNIQUE_VIOLATION
   then
@@ -246,7 +241,7 @@ ngx.log(ngx.DEBUG, "Loading Admin API endpoints")
 
 
 -- Load core routes
-for _, v in ipairs({"kong", "cache", "config"}) do
+for _, v in ipairs({"kong", "cache"}) do
   local routes = require("kong.api.routes." .. v)
   attach_routes(routes)
 end

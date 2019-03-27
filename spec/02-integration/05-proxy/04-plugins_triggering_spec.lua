@@ -72,7 +72,6 @@ for _, strategy in helpers.each_strategy() do
       bp.plugins:insert {
         name   = "rate-limiting",
         config = {
-          policy = "local",
           hour = 1,
         },
       }
@@ -93,7 +92,6 @@ for _, strategy in helpers.each_strategy() do
         route   = { id = route1.id },
         service = { id = service2.id },
         config  = {
-          policy = "local",
           hour  = 2,
         },
       }
@@ -103,7 +101,6 @@ for _, strategy in helpers.each_strategy() do
         name     = "rate-limiting",
         consumer = { id = consumer2.id },
         config   = {
-          policy = "local",
           hour   = 3,
         },
       }
@@ -124,7 +121,6 @@ for _, strategy in helpers.each_strategy() do
         route    = { id = route2.id },
         consumer = { id = consumer2.id },
         config   = {
-          policy = "local",
           hour   = 4,
         },
       }
@@ -155,7 +151,6 @@ for _, strategy in helpers.each_strategy() do
         service  = { id = service4.id },
         consumer = { id = consumer3.id },
         config   = {
-          policy = "local",
           hour   = 5,
         }
       }
@@ -170,7 +165,7 @@ for _, strategy in helpers.each_strategy() do
 
     lazy_teardown(function()
       if proxy_client then proxy_client:close() end
-      helpers.stop_kong(nil, true)
+      helpers.stop_kong()
     end)
 
     it("checks global configuration without credentials", function()
@@ -240,7 +235,7 @@ for _, strategy in helpers.each_strategy() do
           proxy_client:close()
         end
 
-        helpers.stop_kong(nil, true)
+        helpers.stop_kong()
         db:truncate("routes")
         db:truncate("services")
         db:truncate("consumers")
@@ -254,20 +249,20 @@ for _, strategy in helpers.each_strategy() do
             port = helpers.mock_upstream_port,
           }
 
-          local route = assert(bp.routes:insert {
+          local route = assert(db.routes:insert {
             hosts     = { "mock_upstream" },
             protocols = { "http" },
             service   = service,
           })
 
           -- plugin able to short-circuit a request
-          assert(bp.plugins:insert {
+          assert(db.plugins:insert {
             name  = "key-auth",
             route = { id = route.id },
           })
 
           -- response/body filter plugin
-          assert(bp.plugins:insert {
+          assert(db.plugins:insert {
             name   = "dummy",
             route  = { id = route.id },
             config = {
@@ -276,7 +271,7 @@ for _, strategy in helpers.each_strategy() do
           })
 
           -- log phase plugin
-          assert(bp.plugins:insert {
+          assert(db.plugins:insert {
             name   = "file-log",
             route  = { id = route.id },
             config = {
@@ -293,14 +288,14 @@ for _, strategy in helpers.each_strategy() do
           }
 
           -- route that will produce an error
-          local route = assert(bp.routes:insert {
+          local route = assert(db.routes:insert {
             hosts = { "mock_upstream_err" },
             protocols = { "http" },
             service = service,
           })
 
           -- plugin that produces an error
-          assert(bp.plugins:insert {
+          assert(db.plugins:insert {
             name   = "dummy",
             route  = { id = route.id },
             config = {
@@ -309,7 +304,7 @@ for _, strategy in helpers.each_strategy() do
           })
 
           -- log phase plugin
-          assert(bp.plugins:insert {
+          assert(db.plugins:insert {
             name   = "file-log",
             route  = { id = route.id },
             config = {
@@ -333,7 +328,7 @@ for _, strategy in helpers.each_strategy() do
 
         os.remove(FILE_LOG_PATH)
 
-        helpers.stop_kong(nil, true)
+        helpers.stop_kong()
       end)
 
       after_each(function()
@@ -457,7 +452,7 @@ for _, strategy in helpers.each_strategy() do
           proxy_client:close()
         end
 
-        helpers.stop_kong(nil, true)
+        helpers.stop_kong()
 
         db:truncate("routes")
         db:truncate("services")
@@ -493,7 +488,7 @@ for _, strategy in helpers.each_strategy() do
         assert(helpers.start_kong {
           database          = strategy,
           nginx_conf        = "spec/fixtures/custom_nginx.template",
-          --anonymous_reports = true,
+          anonymous_reports = true,
         })
 
         proxy_client = helpers.proxy_client()
@@ -504,7 +499,7 @@ for _, strategy in helpers.each_strategy() do
           proxy_client:close()
         end
 
-        helpers.stop_kong(nil, true)
+        helpers.stop_kong()
       end)
 
       it("runs without causing an internal error", function()
@@ -626,12 +621,6 @@ for _, strategy in helpers.each_strategy() do
           }
         end
 
-        -- start Kong instance with our services and plugins
-        assert(helpers.start_kong {
-          database = strategy,
-          -- /!\ test with real nginx config
-        })
-
         -- start mock httpbin instance
         assert(helpers.start_kong {
           database = strategy,
@@ -642,12 +631,18 @@ for _, strategy in helpers.each_strategy() do
           prefix = "servroot2",
           nginx_conf = "spec/fixtures/custom_nginx.template",
         })
+
+        -- start Kong instance with our services and plugins
+        assert(helpers.start_kong {
+          database = strategy,
+          -- /!\ test with real nginx config
+        })
       end)
 
 
       lazy_teardown(function()
         helpers.stop_kong("servroot2")
-        helpers.stop_kong(nil, true)
+        helpers.stop_kong()
       end)
 
 
@@ -1011,7 +1006,7 @@ for _, strategy in helpers.each_strategy() do
     end)
 
     describe("plugin with run_on", function()
-      describe("#http", function()
+      describe("(http)", function()
         local proxy_ssl_client
 
         lazy_setup(function()
@@ -1026,18 +1021,14 @@ for _, strategy in helpers.each_strategy() do
           db:truncate("plugins")
 
           do
-            if strategy == "off" then
-              assert(bp.cluster_ca:insert())
-            end
-
             -- never used as the plugins short-circuit
-            local mock_service = assert(bp.services:insert {
+            local mock_service = assert(db.services:insert {
               name = "mock-service",
               host = helpers.mock_upstream_host,
               port = helpers.mock_upstream_port,
             })
 
-            local receiving_sidecar = assert(bp.services:insert {
+            local receiving_sidecar = assert(db.services:insert {
               name = "receiving-sidecar",
               host = helpers.mock_upstream_host,
               port = 18443,
@@ -1047,7 +1038,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local first_on_first = assert(bp.routes:insert {
+            local first_on_first = assert(db.routes:insert {
               hosts     = { "first-on-first.org" },
               protocols = { "http" },
               service   = mock_service,
@@ -1075,7 +1066,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local first_on_first_https = assert(bp.routes:insert {
+            local first_on_first_https = assert(db.routes:insert {
               hosts     = { "first-on-first-https.org" },
               protocols = { "https" },
               service   = mock_service,
@@ -1103,13 +1094,13 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local first_on_second_a = assert(bp.routes:insert {
+            local first_on_second_a = assert(db.routes:insert {
               hosts     = { "first-on-second.org" },
               protocols = { "http" },
               service   = receiving_sidecar,
             })
 
-            local first_on_second_b = assert(bp.routes:insert {
+            local first_on_second_b = assert(db.routes:insert {
               hosts      = { "first-on-second.org" },
               protocols  = { "https" },
               paths      = { "/status/200" },
@@ -1149,13 +1140,13 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local first_on_second_a_https = assert(bp.routes:insert {
+            local first_on_second_a_https = assert(db.routes:insert {
               hosts     = { "first-on-second-https.org" },
               protocols = { "https" },
               service   = receiving_sidecar,
             })
 
-            local first_on_second_b_https = assert(bp.routes:insert {
+            local first_on_second_b_https = assert(db.routes:insert {
               hosts      = { "first-on-second-https.org" },
               protocols  = { "https" },
               paths      = { "/status/200" },
@@ -1195,13 +1186,13 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local second_on_second_a = assert(bp.routes:insert {
+            local second_on_second_a = assert(db.routes:insert {
               hosts     = { "second-on-second.org" },
               protocols = { "http" },
               service   = receiving_sidecar,
             })
 
-            local second_on_second_b = assert(bp.routes:insert {
+            local second_on_second_b = assert(db.routes:insert {
               hosts      = { "second-on-second.org" },
               protocols  = { "https" },
               paths      = { "/status/200" },
@@ -1241,13 +1232,13 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local second_on_second_a_https = assert(bp.routes:insert {
+            local second_on_second_a_https = assert(db.routes:insert {
               hosts     = { "second-on-second-https.org" },
               protocols = { "https" },
               service   = receiving_sidecar,
             })
 
-            local second_on_second_b_https = assert(bp.routes:insert {
+            local second_on_second_b_https = assert(db.routes:insert {
               hosts      = { "second-on-second-https.org" },
               protocols  = { "https" },
               paths      = { "/status/200" },
@@ -1287,7 +1278,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local second_on_first = assert(bp.routes:insert {
+            local second_on_first = assert(db.routes:insert {
               hosts     = { "second-on-first.org" },
               protocols = { "http" },
               service   = mock_service,
@@ -1315,7 +1306,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local second_on_first_https = assert(bp.routes:insert {
+            local second_on_first_https = assert(db.routes:insert {
               hosts     = { "second-on-first-https.org" },
               protocols = { "https" },
               service   = mock_service,
@@ -1343,7 +1334,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local all_on_first = assert(bp.routes:insert {
+            local all_on_first = assert(db.routes:insert {
               hosts     = { "all-on-first.org" },
               protocols = { "http" },
               service   = mock_service,
@@ -1371,7 +1362,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local all_on_first_https = assert(bp.routes:insert {
+            local all_on_first_https = assert(db.routes:insert {
               hosts     = { "all-on-first-https.org" },
               protocols = { "https" },
               service   = mock_service,
@@ -1399,13 +1390,13 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local all_on_second_a = assert(bp.routes:insert {
+            local all_on_second_a = assert(db.routes:insert {
               hosts     = { "all-on-second.org" },
               protocols = { "http" },
               service   = receiving_sidecar,
             })
 
-            local all_on_second_b = assert(bp.routes:insert {
+            local all_on_second_b = assert(db.routes:insert {
               hosts      = { "all-on-second.org" },
               protocols  = { "https" },
               paths      = { "/status/200" },
@@ -1445,13 +1436,13 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local all_on_second_a_https = assert(bp.routes:insert {
+            local all_on_second_a_https = assert(db.routes:insert {
               hosts     = { "all-on-second-https.org" },
               protocols = { "http" },
               service   = receiving_sidecar,
             })
 
-            local all_on_second_b_https = assert(bp.routes:insert {
+            local all_on_second_b_https = assert(db.routes:insert {
               hosts      = { "all-on-second-https.org" },
               protocols  = { "https" },
               paths      = { "/status/200" },
@@ -1713,7 +1704,7 @@ for _, strategy in helpers.each_strategy() do
         end)
       end)
 
-      describe("#stream", function()
+      describe("(stream)", function()
         lazy_setup(function()
           helpers.stop_kong()
 
@@ -1722,12 +1713,8 @@ for _, strategy in helpers.each_strategy() do
           db:truncate("plugins")
 
           do
-            if strategy == "off" then
-              assert(bp.cluster_ca:insert())
-            end
-
             -- never used as the plugins short-circuit
-            local mock_service = assert(bp.services:insert {
+            local mock_service = assert(db.services:insert {
               name = "mock-service",
               protocol = "tcp",
               host = helpers.mock_upstream_host,
@@ -1736,7 +1723,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local first_on_first = assert(bp.routes:insert {
+            local first_on_first = assert(db.routes:insert {
               destinations = {
                 {
                   port = 18003
@@ -1768,7 +1755,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local first_on_first_tls = assert(bp.routes:insert {
+            local first_on_first_tls = assert(db.routes:insert {
               destinations = {
                 {
                   port = 18443
@@ -1800,14 +1787,14 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local receiving_sidecar_a = assert(bp.services:insert {
+            local receiving_sidecar_a = assert(db.services:insert {
               name = "receiving-sidecar-a",
               host = helpers.mock_upstream_host,
               port = 19444,
               protocol = "tls",
             })
 
-            local first_on_second_a = assert(bp.routes:insert {
+            local first_on_second_a = assert(db.routes:insert {
               destinations = {
                 {
                   port = 18004
@@ -1817,7 +1804,7 @@ for _, strategy in helpers.each_strategy() do
               service   = receiving_sidecar_a,
             })
 
-            local first_on_second_b = assert(bp.routes:insert {
+            local first_on_second_b = assert(db.routes:insert {
               destinations = {
                 {
                   port = 19444
@@ -1859,7 +1846,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local first_on_second_tls = assert(bp.routes:insert {
+            local first_on_second_tls = assert(db.routes:insert {
               destinations = {
                 {
                   port = 18444
@@ -1881,14 +1868,14 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local receiving_sidecar_b = assert(bp.services:insert {
+            local receiving_sidecar_b = assert(db.services:insert {
               name = "receiving-sidecar-b",
               host = helpers.mock_upstream_host,
               port = 19445,
               protocol = "tls",
             })
 
-            local second_on_second_a = assert(bp.routes:insert {
+            local second_on_second_a = assert(db.routes:insert {
               destinations = {
                 {
                   port = 18005
@@ -1898,7 +1885,7 @@ for _, strategy in helpers.each_strategy() do
               service   = receiving_sidecar_b,
             })
 
-            local second_on_second_b = assert(bp.routes:insert {
+            local second_on_second_b = assert(db.routes:insert {
               destinations = {
                 {
                   port = 19445
@@ -1940,7 +1927,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local second_on_second_tls = assert(bp.routes:insert {
+            local second_on_second_tls = assert(db.routes:insert {
               destinations = {
                 {
                   port = 18445
@@ -1962,7 +1949,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local second_on_first = assert(bp.routes:insert {
+            local second_on_first = assert(db.routes:insert {
               destinations = {
                 {
                   port = 18006
@@ -1994,7 +1981,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local second_on_first_tls = assert(bp.routes:insert {
+            local second_on_first_tls = assert(db.routes:insert {
               destinations = {
                 {
                   port = 18446
@@ -2026,7 +2013,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local all_on_first = assert(bp.routes:insert {
+            local all_on_first = assert(db.routes:insert {
               destinations = {
                 {
                   port = 18007
@@ -2058,7 +2045,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local all_on_first = assert(bp.routes:insert {
+            local all_on_first = assert(db.routes:insert {
               destinations = {
                 {
                   port = 18447
@@ -2090,14 +2077,14 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local receiving_sidecar_c = assert(bp.services:insert {
+            local receiving_sidecar_c = assert(db.services:insert {
               name = "receiving-sidecar-c",
               host = helpers.mock_upstream_host,
               port = 19448,
               protocol = "tls",
             })
 
-            local all_on_second_a = assert(bp.routes:insert {
+            local all_on_second_a = assert(db.routes:insert {
               destinations = {
                 {
                   port = 18008
@@ -2107,7 +2094,7 @@ for _, strategy in helpers.each_strategy() do
               service   = receiving_sidecar_c,
             })
 
-            local all_on_second_b = assert(bp.routes:insert {
+            local all_on_second_b = assert(db.routes:insert {
               destinations = {
                 {
                   port = 19448
@@ -2149,7 +2136,7 @@ for _, strategy in helpers.each_strategy() do
 
             --
 
-            local all_on_second_tls = assert(bp.routes:insert {
+            local all_on_second_tls = assert(db.routes:insert {
               destinations = {
                 {
                   port = 18448

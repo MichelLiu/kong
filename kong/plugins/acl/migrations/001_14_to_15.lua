@@ -83,4 +83,9 @@ return {
       end
     end,
   },
+
+  mysql = {
+    up = [[
+    ]],
+  },
 }

@@ -1,8 +1,8 @@
 local version = setmetatable({
   major = 1,
-  minor = 1,
-  patch = 0,
-  --suffix = "",
+  minor = 0,
+  patch = 3,
+  --suffix = ""
 }, {
   __tostring = function(t)
     return string.format("%d.%d.%d%s", t.major, t.minor, t.patch,

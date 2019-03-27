@@ -868,7 +868,7 @@ describe("schema", function()
             { config = { type = "record", abstract = true, } },
           }
         })
-        assert(Test:new_subschema("my_subschema", {
+        Test:new_subschema("my_subschema", {
           fields = {
             { config = {
                 type = "record",
@@ -878,7 +878,7 @@ describe("schema", function()
                 }
             } }
           }
-        }))
+        })
         assert.truthy(Test:validate({
           name = "my_subschema",
           config = {
@@ -915,7 +915,7 @@ describe("schema", function()
             { bla = { type = "integer", abstract = true, } },
           }
         })
-        assert(Test:new_subschema("my_subschema", {
+        Test:new_subschema("my_subschema", {
           fields = {
             { config = {
                 type = "record",
@@ -925,7 +925,7 @@ describe("schema", function()
                 }
             } }
           }
-        }))
+        })
         assert.truthy(Test:validate({
           name = "my_subschema",
           config = {
@@ -949,7 +949,7 @@ describe("schema", function()
             } },
           }
         })
-        local ok, err = Test:new_subschema("my_subschema", {
+        Test:new_subschema("my_subschema", {
           fields = {
             { config = {
                 type = "record",
@@ -961,8 +961,18 @@ describe("schema", function()
             { new_field = { type = "string", required = true, } },
           }
         })
+
+        local ok, errors = Test:validate({
+          name = "my_subschema",
+          config = {
+            foo = 123,
+          },
+          new_field = "blah",
+        })
         assert.falsy(ok)
-        assert.matches("new_field: cannot create a new field", err, 1, true)
+        assert.same({
+          new_field = "unknown field",
+        }, errors)
       end)
 
       it("fails when trying to use an abstract field (incomplete subschema)", function()
@@ -975,7 +985,7 @@ describe("schema", function()
             { bla = { type = "integer", abstract = true, } },
           }
         })
-        assert(Test:new_subschema("my_subschema", {
+        Test:new_subschema("my_subschema", {
           fields = {
             { config = {
                 type = "record",
@@ -985,7 +995,7 @@ describe("schema", function()
                 }
             } }
           }
-        }))
+        })
         local ok, errors = Test:validate({
           name = "my_subschema",
           config = {
@@ -1010,7 +1020,7 @@ describe("schema", function()
             { config = { type = "record", abstract = true, } },
           }
         })
-        assert(Test:new_subschema("my_subschema", {
+        Test:new_subschema("my_subschema", {
           fields = {
             { config = {
                 type = "record",
@@ -1020,7 +1030,7 @@ describe("schema", function()
                 }
             } }
           }
-        }))
+        })
         local ok, errors = Test:validate({
           name = "my_subschema",
           bla = 4.5,
@@ -1047,17 +1057,17 @@ describe("schema", function()
             { consumer = { type = "string", } },
           }
         })
-        assert(Test:new_subschema("length_5", {
+        Test:new_subschema("length_5", {
           fields = {
             { consumer = {
                 type = "string",
                 len_eq = 5,
             } }
           }
-        }))
-        assert(Test:new_subschema("no_restrictions", {
+        })
+        Test:new_subschema("no_restrictions", {
           fields = {}
-        }))
+        })
 
         local ok, errors = Test:validate({
           name = "length_5",
@@ -1091,15 +1101,32 @@ describe("schema", function()
             { consumer = { type = "string", } },
           }
         })
-        local ok, err = Test:new_subschema("length_5", {
+        Test:new_subschema("length_5", {
           fields = {
             { consumer = {
                 type = "integer",
             } }
           }
         })
+        Test:new_subschema("no_restrictions", {
+          fields = {}
+        })
+
+        local ok, errors = Test:validate({
+          name = "length_5",
+          consumer = "aaaaa",
+        })
         assert.falsy(ok)
-        assert.matches("consumer: cannot change type in a specialized field", err, 1, true)
+        assert.same({
+          consumer = "error in schema definition: cannot change type in a specialized field",
+        }, errors)
+
+        ok = Test:validate({
+          name = "no_restrictions",
+          consumer = "aaa",
+        })
+        assert.truthy(ok)
+
       end)
 
       it("a specialized field can force a value using 'eq'", function()
@@ -1119,14 +1146,14 @@ describe("schema", function()
             { consumer = { type = "foreign", reference = "mock_consumers" } },
           }
         }))
-        assert(Test:new_subschema("no_consumer", {
+        Test:new_subschema("no_consumer", {
           fields = {
             { consumer = { type = "foreign", reference = "mock_consumers", eq = ngx.null } }
           }
-        }))
-        assert(Test:new_subschema("no_restrictions", {
+        })
+        Test:new_subschema("no_restrictions", {
           fields = {}
-        }))
+        })
 
         local ok, errors = Test:validate({
           name = "no_consumer",
@@ -2304,7 +2331,7 @@ describe("schema", function()
             { config = { type = "record", abstract = true } },
           }
         })
-        assert(Test:new_subschema("my_subschema", {
+        Test:new_subschema("my_subschema", {
           fields = {
             { config = {
                 type = "record",
@@ -2314,7 +2341,7 @@ describe("schema", function()
                 default = { foo = "bla" }
              } }
           }
-        }))
+        })
 
         local input = {
           name = "my_subschema",

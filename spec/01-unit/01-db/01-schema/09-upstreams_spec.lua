@@ -312,8 +312,7 @@ describe("load upstreams", function()
         local leaf = err
         repeat
           leaf = leaf[next(leaf)]
-          local tnext = type(leaf) == "table" and type(next(leaf))
-        until type(leaf) ~= "table" or not (tnext == "string" or tnext == "number")
+        until type(leaf) ~= "table" or type(next(leaf)) ~= "string"
         assert.match(test[2], leaf, 1, true, inspect(err))
       end
     end)

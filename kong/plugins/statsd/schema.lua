@@ -72,7 +72,6 @@ local DEFAULT_METRICS = {
 return {
   name = "statsd",
   fields = {
-    { protocols = typedefs.protocols_http },
     { config = {
         type = "record",
         fields = {

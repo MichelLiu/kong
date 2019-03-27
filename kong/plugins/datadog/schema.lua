@@ -92,7 +92,6 @@ local DEFAULT_METRICS = {
 return {
   name = "datadog",
   fields = {
-    { protocols = typedefs.protocols_http },
     { config = {
         type = "record",
         default = { metrics = DEFAULT_METRICS },

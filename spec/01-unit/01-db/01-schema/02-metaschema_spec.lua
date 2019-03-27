@@ -425,7 +425,7 @@ describe("metaschema", function()
         { foo = { type = "any" } } } }
     local ok, err = MetaSchema:validate(s)
     assert.falsy(ok)
-    assert.match("expected one of", err.fields[1].type)
+    assert.match("expected one of", err.fields.type)
   end)
 
   describe("subschemas", function()
@@ -581,9 +581,7 @@ describe("metasubschema", function()
     local ok, err = MetaSchema.MetaSubSchema:validate(s)
     assert.falsy(ok)
     assert.same({
-      fields = {
-        "expected a record",
-      },
+      fields = "expected a record",
       foo = "'foo' must be a table",
       primary_key = "unknown field"
     }, err)
@@ -652,7 +650,7 @@ describe("metasubschema", function()
     local ok, err = MetaSchema.MetaSubSchema:validate(s)
     assert.falsy(ok)
     assert.match("only one of these fields must be non-empty",
-                 err.entity_checks[1]["@entity"][1], 1, true)
+                 err.entity_checks["@entity"][1], 1, true)
   end)
 
   it("accepts a function in an entity check", function()
@@ -694,11 +692,8 @@ describe("metasubschema", function()
     assert.falsy(ok)
     assert.same({
       fields = {
-        {
-          elements = {
-            "unknown field",
-            type = "required field missing",
-          }
+        elements = { "unknown field",
+          type = "required field missing"
         }
       },
       foo = "missing type declaration",
@@ -789,7 +784,7 @@ describe("metasubschema", function()
         { foo = { type = "any" } } } }
     local ok, err = MetaSchema.MetaSubSchema:validate(s)
     assert.falsy(ok)
-    assert.match("expected one of", err.fields[1].type)
+    assert.match("expected one of", err.fields.type)
   end)
 
   it("validates a value with 'eq'", function()

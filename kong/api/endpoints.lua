@@ -10,12 +10,10 @@ local unescape_uri = ngx.unescape_uri
 local tonumber     = tonumber
 local tostring     = tostring
 local select       = select
+local concat       = table.concat
 local null         = ngx.null
 local type         = type
 local fmt          = string.format
-local concat       = table.concat
-local re_match     = ngx.re.match
-local split        = utils.split
 
 
 -- error codes http status codes
@@ -31,7 +29,6 @@ local ERRORS_HTTP_CODES = {
   [Errors.codes.INVALID_SIZE]          = 400,
   [Errors.codes.INVALID_UNIQUE]        = 400,
   [Errors.codes.INVALID_OPTIONS]       = 400,
-  [Errors.codes.OPERATION_UNSUPPORTED] = 405,
 }
 
 
@@ -114,11 +111,8 @@ local function handle_error(err_t)
     return app_helpers.yield_error(err_t)
   end
 
-  if err_t.code == Errors.codes.OPERATION_UNSUPPORTED then
-    return kong.response.exit(status, err_t)
-  end
-
-  return kong.response.exit(status, utils.get_default_exit_body(status, err_t))
+  local body = utils.get_default_exit_body(status, err_t)
+  return kong.response.exit(status, body)
 end
 
 
@@ -131,31 +125,8 @@ local function extract_options(args, schema, context)
     if schema.ttl == true and args.ttl ~= nil and (context == "insert" or
                                                    context == "update" or
                                                    context == "upsert") then
-      options.ttl = args.ttl
+      options.ttl = tonumber(args.ttl) or args.ttl
       args.ttl = nil
-    end
-
-    if schema.fields.tags and args.tags ~= nil and context == "page" then
-      local tags = args.tags
-      if type(tags) == "table" then
-        tags = tags[1]
-      end
-
-      if re_match(tags, [=[^([a-zA-Z0-9\.\-\_~]+(?:,|$))+$]=], 'jo') then
-        -- 'a,b,c' or 'a'
-        options.tags_cond = 'and'
-        options.tags = split(tags, ',')
-      elseif re_match(tags, [=[^([a-zA-Z0-9\.\-\_~]+(?:/|$))+$]=], 'jo') then
-        -- 'a/b/c'
-        options.tags_cond = 'or'
-        options.tags = split(tags, '/')
-      else
-        options.tags = tags
-        -- not setting tags_cond since we can't determine the cond
-        -- will raise an error in db/dao/init.lua:validate_options_value
-      end
-
-      args.tags = nil
     end
   end
 
@@ -187,11 +158,7 @@ local function query_entity(context, self, db, schema, method)
     args = self.args.uri
   end
 
-  local opts, err = extract_options(args, schema, context)
-  if err then
-    return nil, err, db[schema.name].errors:invalid_size(err)
-  end
-
+  local opts = extract_options(args, schema, context)
   local dao = db[schema.name]
 
   if is_insert then
@@ -282,23 +249,14 @@ end
 -- /services
 local function get_collection_endpoint(schema, foreign_schema, foreign_field_name, method)
   return not foreign_schema and function(self, db, helpers)
-    local next_page_tags = ""
-
-    local args = self.args.uri
-    if args.tags then
-      next_page_tags = "&tags=" .. (type(args.tags) == "table" and args.tags[1] or args.tags)
-    end
-
     local data, _, err_t, offset = page_collection(self, db, schema, method)
-
     if err_t then
       return handle_error(err_t)
     end
 
-    local next_page = offset and fmt("/%s?offset=%s%s",
+    local next_page = offset and fmt("/%s?offset=%s",
                                      schema.name,
-                                     escape_uri(offset),
-                                     next_page_tags) or null
+                                     escape_uri(offset)) or null
 
     return ok {
       data   = data,

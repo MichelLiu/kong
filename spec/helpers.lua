@@ -23,8 +23,6 @@ local consumers_schema_def = require "kong.db.schema.entities.consumers"
 local services_schema_def = require "kong.db.schema.entities.services"
 local plugins_schema_def = require "kong.db.schema.entities.plugins"
 local routes_schema_def = require "kong.db.schema.entities.routes"
-local dc_blueprints = require "spec.fixtures.dc_blueprints"
-local declarative = require "kong.db.declarative"
 local conf_loader = require "kong.conf_loader"
 local kong_global = require "kong.global"
 local Blueprints = require "spec.fixtures.blueprints"
@@ -32,7 +30,6 @@ local pl_stringx = require "pl.stringx"
 local pl_utils = require "pl.utils"
 local pl_path = require "pl.path"
 local pl_file = require "pl.file"
-local version = require "version"
 local pl_dir = require "pl.dir"
 local pl_Set = require "pl.Set"
 local Schema = require "kong.db.schema"
@@ -76,7 +73,7 @@ end
 --
 -- will return: "hello world\nfoo bar"
 local function unindent(str, concat_newlines, spaced_newlines)
-  str = string.match(str, "(.-%S*)%s*$")
+  str = string.match(str, "^%s*(%S.-%S*)%s*$")
   if not str then
     return ""
   end
@@ -85,7 +82,6 @@ local function unindent(str, concat_newlines, spaced_newlines)
   local prefix = ""
   local len
 
-  str = str:match("^%s") and "\n" .. str or str
   for pref in str:gmatch("\n(%s+)") do
     len = #prefix
 
@@ -98,7 +94,7 @@ local function unindent(str, concat_newlines, spaced_newlines)
   local repl = concat_newlines and "" or "\n"
   repl = spaced_newlines and " " or repl
 
-  return (str:gsub("^\n%s*", ""):gsub("\n" .. prefix, repl):gsub("\n$", ""):gsub("\\r", "\r"))
+  return (str:gsub("\n" .. prefix, repl):gsub("\n$", "")):gsub("\\r", "\r")
 end
 
 ---------------
@@ -113,8 +109,6 @@ local db = assert(DB.new(conf))
 assert(db:init_connector())
 db.plugins:load_plugin_schemas(conf.loaded_plugins)
 local blueprints = assert(Blueprints.new(db))
-local dcbp
-local config_yml
 
 local each_strategy
 
@@ -204,10 +198,6 @@ local function get_db_utils(strategy, tables, plugins)
   db:truncate("plugins")
   assert(db.plugins:load_plugin_schemas(conf.loaded_plugins))
 
-  -- cleanup the tags table, since it will be hacky and
-  -- not necessary to implement "truncate trigger" in Cassandra
-  db:truncate("tags")
-
   -- cleanup new DB tables
   if not tables then
     assert(db:truncate())
@@ -217,15 +207,7 @@ local function get_db_utils(strategy, tables, plugins)
   end
 
   -- blueprints
-  local bp
-  if strategy ~= "off" then
-    bp = assert(Blueprints.new(db))
-    dcbp = nil
-  else
-    bp = assert(dc_blueprints.new(db))
-    bp.cluster_ca:insert()
-    dcbp = bp
-  end
+  local bp = assert(Blueprints.new(db))
 
   if plugins then
     for _, plugin in ipairs(plugins) do
@@ -233,20 +215,7 @@ local function get_db_utils(strategy, tables, plugins)
     end
   end
 
-  _G.kong.db = db
-
   return bp, db
-end
-
-
-local function get_cache(db)
-  local worker_events = assert(kong_global.init_worker_events())
-  local cluster_events = assert(kong_global.init_cluster_events(conf, db))
-  local cache = assert(kong_global.init_cache(conf,
-                                              cluster_events,
-                                              worker_events
-                                              ))
-  return cache
 end
 
 -----------------
@@ -1282,96 +1251,6 @@ local function validate_plugin_config_schema(config, schema_def)
 end
 
 
---- Return the actual Kong version the tests are running against.
--- See [version.lua](https://github.com/kong/version.lua) for the format. This is mostly useful for testing plugins
--- that should work with multiple Kong versions.
--- @return a `version`
--- @usage
--- local version = require 'version'
--- if helpers.get_version() < version("0.15.0") then
---   -- do something
--- end
-local function get_version()
-  return version(select(3, assert(kong_exec("version"))))
-end
-
-
-local function start_kong(env, tables, preserve_prefix)
-  if tables ~= nil and type(tables) ~= "table" then
-    error("arg #2 must be a list of tables to truncate")
-  end
-  env = env or {}
-  local prefix = env.prefix or conf.prefix
-  if not preserve_prefix then
-    local ok, err = prepare_prefix(prefix)
-    if not ok then return nil, err end
-  end
-
-  truncate_tables(db, tables)
-
-  local nginx_conf = ""
-  if env.nginx_conf then
-    nginx_conf = " --nginx-conf " .. env.nginx_conf
-  end
-
-  if dcbp and not env.declarative_config then
-    if not config_yml then
-      config_yml = prefix .. "/config.yml"
-      local cfg = dcbp.done()
-      local ok, err = declarative.to_yaml_file(cfg, config_yml)
-      if not ok then
-        return nil, err
-      end
-    end
-    env = utils.deep_copy(env)
-    env.declarative_config = config_yml
-  end
-
-  return kong_exec("start --conf " .. TEST_CONF_PATH .. nginx_conf, env)
-end
-
-
-local function stop_kong(prefix, preserve_prefix, preserve_dc)
-  prefix = prefix or conf.prefix
-
-  local running_conf = get_running_conf(prefix)
-  if not running_conf then return end
-
-  local ok, err = kong_exec("stop --prefix " .. prefix)
-
-  wait_pid(running_conf.nginx_pid)
-
-  if not preserve_prefix then
-    clean_prefix(prefix)
-  end
-
-  if not preserve_dc then
-    config_yml = nil
-  end
-
-  return ok, err
-end
-
-
--- Restart Kong, reusing declarative config when using database=off
-local function restart_kong(env, tables)
-  stop_kong(env.prefix, true, true)
-  return start_kong(env, tables, true)
-end
-
-
-local function make_yaml_file(content)
-  local filename = os.tmpname()
-  os.rename(filename, filename .. ".yml")
-  filename = filename .. ".yml"
-  local fd = assert(io.open(filename, "w"))
-  assert(fd:write(unindent(content)))
-  assert(fd:write("\n")) -- ensure last line ends in newline
-  assert(fd:close())
-  return filename
-end
-
-
 ----------
 -- Exposed
 ----------
@@ -1387,7 +1266,6 @@ return {
   db = db,
   blueprints = blueprints,
   get_db_utils = get_db_utils,
-  get_cache = get_cache,
   bootstrap_database = bootstrap_database,
   bin_path = BIN_PATH,
   test_conf = conf,
@@ -1413,7 +1291,6 @@ return {
   -- Kong testing helpers
   execute = exec,
   kong_exec = kong_exec,
-  get_version = get_version,
   http_client = http_client,
   wait_until = wait_until,
   tcp_server = tcp_server,
@@ -1436,11 +1313,38 @@ return {
   openresty_ver_num = openresty_ver_num(),
   unindent = unindent,
 
-  -- launching Kong subprocesses
-  start_kong = start_kong,
-  stop_kong = stop_kong,
-  restart_kong = restart_kong,
+  start_kong = function(env, tables)
+    if tables ~= nil and type(tables) ~= "table" then
+      error("arg #2 must be a list of tables to truncate")
+    end
+    env = env or {}
+    local ok, err = prepare_prefix(env.prefix)
+    if not ok then return nil, err end
 
+    truncate_tables(db, tables)
+
+    local nginx_conf = ""
+    if env.nginx_conf then
+      nginx_conf = " --nginx-conf " .. env.nginx_conf
+    end
+
+    return kong_exec("start --conf " .. TEST_CONF_PATH .. nginx_conf, env)
+  end,
+  stop_kong = function(prefix, preserve_prefix)
+    prefix = prefix or conf.prefix
+
+    local running_conf = get_running_conf(prefix)
+    if not running_conf then return end
+
+    local ok, err = kong_exec("stop --prefix " .. prefix)
+
+    wait_pid(running_conf.nginx_pid)
+
+    if not preserve_prefix then
+      clean_prefix(prefix)
+    end
+    return ok, err
+  end,
   -- Only use in CLI tests from spec/02-integration/01-cmd
   kill_all = function(prefix, timeout)
     local kill = require "kong.cmd.utils.kill"
@@ -1454,7 +1358,5 @@ return {
       kill.kill(pid_path, "-TERM")
       wait_pid(pid_path, timeout)
     end
-  end,
-
-  make_yaml_file = make_yaml_file,
+end
 }

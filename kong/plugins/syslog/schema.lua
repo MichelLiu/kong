@@ -1,5 +1,3 @@
-local typedefs = require "kong.db.schema.typedefs"
-
 local severity = {
   type = "string",
   default = "info",
@@ -9,7 +7,6 @@ local severity = {
 return {
   name = "syslog",
   fields = {
-    { protocols = typedefs.protocols_http },
     { config = {
         type = "record",
         fields = {

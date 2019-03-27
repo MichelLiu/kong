@@ -30,7 +30,7 @@ describe("cors schema", function()
 
       assert.falsy(ok)
       assert.equals("'invalid_**regex' is not a valid regex",
-                    err.config.origins[2])
+                    err.config.origins)
     end)
   end)
 end)

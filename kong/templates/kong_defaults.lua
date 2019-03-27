@@ -35,11 +35,15 @@ client_max_body_size = 0
 client_body_buffer_size = 8k
 error_default_type = text/plain
 
-database = postgres
+database = mysql
+mysql_host = localhost
+mysql_port = 3306
+mysql_database = kong1
+mysql_user = root
+mysql_password = liuwei13
 pg_host = 127.0.0.1
 pg_port = 5432
 pg_database = kong
-pg_schema = NONE
 pg_timeout = 5000
 pg_user = kong
 pg_password = NONE
@@ -60,7 +64,6 @@ cassandra_repl_strategy = SimpleStrategy
 cassandra_repl_factor = 1
 cassandra_data_centers = dc1:2,dc2:3
 cassandra_schema_consensus_timeout = 10000
-declarative_config = NONE
 
 db_update_frequency = 5
 db_update_propagation = 0

@@ -10,22 +10,22 @@ local _M = {}
 _M.STRATEGIES   = {
   ["postgres"]  = true,
   ["cassandra"] = true,
-  ["off"] = true,
+  ["mysql"] = true,
 }
 
 
-function _M.new(kong_config, database, schemas, errors)
-  local database = database or kong_config.database
+function _M.new(kong_config, strategy, schemas, errors)
+  local strategy = strategy or kong_config.database
 
-  if not _M.STRATEGIES[database] then
-    error("unknown strategy: " .. database, 2)
+  if not _M.STRATEGIES[strategy] then
+    error("unknown strategy: " .. strategy, 2)
   end
 
   -- strategy-specific connector with :connect() :setkeepalive() :query() ...
-  local Connector = require(fmt("kong.db.strategies.%s.connector", database))
+  local Connector = require(fmt("kong.db.strategies.%s.connector", strategy))
 
   -- strategy-specific automated CRUD query builder with :insert() :select()
-  local Strategy = require(fmt("kong.db.strategies.%s", database))
+  local Strategy = require(fmt("kong.db.strategies.%s", strategy))
 
   local connector, err = Connector.new(kong_config)
   if not connector then
@@ -55,7 +55,7 @@ function _M.new(kong_config, database, schemas, errors)
       return nil, nil, err
     end
 
-    local custom_strat = fmt("kong.db.strategies.%s.%s", database, schema.name)
+    local custom_strat = fmt("kong.db.strategies.%s.%s", strategy, schema.name)
     local exists, mod = utils.load_module_if_exists(custom_strat)
     if exists and mod then
       local parent_mt = getmetatable(strategy)

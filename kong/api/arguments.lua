@@ -248,10 +248,6 @@ infer = function(args, schema)
     end
   end
 
-  if schema.ttl == true and args.ttl then
-    args.ttl = tonumber(args.ttl) or args.ttl
-  end
-
   return args
 end
 

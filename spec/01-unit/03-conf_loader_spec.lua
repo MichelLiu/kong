@@ -206,14 +206,7 @@ describe("Configuration loader", function()
     assert.equal("/usr/local/kong/ssl/admin-kong-default.key", conf.admin_ssl_cert_key_default)
   end)
   it("strips comments ending settings", function()
-    local _os_getenv = os.getenv
-    finally(function()
-      os.getenv = _os_getenv -- luacheck: ignore
-    end)
-    os.getenv = function() end -- luacheck: ignore
-
     local conf = assert(conf_loader("spec/fixtures/to-strip.conf"))
-
     assert.equal("cassandra", conf.database)
     assert.equal("debug", conf.log_level)
   end)
@@ -234,22 +227,9 @@ describe("Configuration loader", function()
         plugins = "off",
       }))
       assert.True(search_directive(conf.nginx_http_directives,
-                                   "variables_hash_bucket_size", '"128"'))
-      assert.True(search_directive(conf.nginx_stream_directives,
-                                   "variables_hash_bucket_size", '"128"'))
-
+                  "lua_shared_dict", "custom_cache 5m"))
       assert.True(search_directive(conf.nginx_http_directives,
-                                   "lua_shared_dict", "custom_cache 5m"))
-      assert.True(search_directive(conf.nginx_stream_directives,
-                                   "lua_shared_dict", "custom_cache 5m"))
-
-      assert.True(search_directive(conf.nginx_proxy_directives,
-                                   "proxy_bind", "127.0.0.1 transparent"))
-      assert.True(search_directive(conf.nginx_sproxy_directives,
-                                   "proxy_bind", "127.0.0.1 transparent"))
-
-      assert.True(search_directive(conf.nginx_admin_directives,
-                                   "server_tokens", "off"))
+                  "large_client_header_buffers", "8 24k"))
     end)
 
     it("quotes numeric flexible prefix based configs", function()
@@ -264,33 +244,15 @@ describe("Configuration loader", function()
 
     it("accepts flexible config values with precedence", function()
       local conf = assert(conf_loader("spec/fixtures/nginx-directives.conf", {
-        ["nginx_http_variables_hash_bucket_size"] = "256",
-        ["nginx_stream_variables_hash_bucket_size"] = "256",
+        ["nginx_http_large_client_header_buffers"] = "4 16k",
         ["nginx_http_lua_shared_dict"] = "custom_cache 2m",
-        ["nginx_stream_lua_shared_dict"] = "custom_cache 2m",
-        ["nginx_proxy_proxy_bind"] = "127.0.0.2 transparent",
-        ["nginx_sproxy_proxy_bind"] = "127.0.0.2 transparent",
-        ["nginx_admin_server_tokens"] = "build",
         plugins = "off",
       }))
 
       assert.True(search_directive(conf.nginx_http_directives,
-                                   "variables_hash_bucket_size", '"256"'))
-      assert.True(search_directive(conf.nginx_stream_directives,
-                                   "variables_hash_bucket_size", '"256"'))
-
+                  "lua_shared_dict", "custom_cache 2m"))
       assert.True(search_directive(conf.nginx_http_directives,
-                                   "lua_shared_dict", "custom_cache 2m"))
-      assert.True(search_directive(conf.nginx_stream_directives,
-                                   "lua_shared_dict", "custom_cache 2m"))
-
-      assert.True(search_directive(conf.nginx_proxy_directives,
-                                   "proxy_bind", "127.0.0.2 transparent"))
-      assert.True(search_directive(conf.nginx_sproxy_directives,
-                                   "proxy_bind", "127.0.0.2 transparent"))
-
-      assert.True(search_directive(conf.nginx_admin_directives,
-                                   "server_tokens", "build"))
+                  "large_client_header_buffers", "4 16k"))
     end)
   end)
 
@@ -451,7 +413,7 @@ describe("Configuration loader", function()
       local conf, err = conf_loader(nil, {
         database = "mysql"
       })
-      assert.equal("database has an invalid value: 'mysql' (postgres, cassandra, off)", err)
+      assert.equal("database has an invalid value: 'mysql' (postgres, cassandra)", err)
       assert.is_nil(conf)
 
       conf, err = conf_loader(nil, {
@@ -643,12 +605,12 @@ describe("Configuration loader", function()
           assert.equals("foo:bar", conf.ssl_ciphers)
         end)
         it("doesn't override ssl_ciphers when undefined", function()
-          local http_tls = require "http.tls"
+          local ciphers = require "kong.tools.ciphers"
           local conf, err = conf_loader(nil, {
             ssl_cipher_suite = "custom",
           })
           assert.is_nil(err)
-          assert.same(http_tls.modern_cipher_list, conf.ssl_ciphers)
+          assert.same(ciphers("modern"), conf.ssl_ciphers)
         end)
       end)
       describe("client", function()
@@ -776,13 +738,10 @@ describe("Configuration loader", function()
     it("honors path if provided even if a default file exists", function()
       conf_loader.add_default_path("spec/fixtures/to-strip.conf")
 
-      local _os_getenv = os.getenv
       finally(function()
-        os.getenv = _os_getenv -- luacheck: ignore
         package.loaded["kong.conf_loader"] = nil
         conf_loader = require "kong.conf_loader"
       end)
-      os.getenv = function() end -- luacheck: ignore
 
       local conf = assert(conf_loader(helpers.test_conf_path))
       assert.equal("postgres", conf.database)
@@ -798,13 +757,10 @@ describe("Configuration loader", function()
     it("honors path if provided even if a default file exists", function()
       conf_loader.add_default_path("spec/fixtures/to-strip.conf")
 
-      local _os_getenv = os.getenv
       finally(function()
-        os.getenv = _os_getenv -- luacheck: ignore
         package.loaded["kong.conf_loader"] = nil
         conf_loader = require "kong.conf_loader"
       end)
-      os.getenv = function() end -- luacheck: ignore
 
       local conf = assert(conf_loader(helpers.test_conf_path))
       assert.equal("postgres", conf.database)

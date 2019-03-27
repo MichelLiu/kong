@@ -14,86 +14,7 @@ function CassandraConnector.new(kong_config)
   do
     -- Resolve contact points before instantiating cluster, since the
     -- driver does not support hostnames in the contact points list.
-    --
-    -- The below logic includes a hack so that we are able to run our DNS
-    -- resolver in init_by_lua:
-    --
-    -- 1. We override ngx.socket.tcp/udp so that resty.dns.resolver will run
-    --    in init_by_lua (which has no cosockets)
-    -- 2. We force the dns_no_sync option so that resty.dns.client will not
-    --    spawn an ngx.timer (not supported in init_by_lua)
-    --
-    -- TODO: replace fallback logic with lua-resty-socket once it supports
-    --       ngx.socket.udp
-
-    local tcp_old = ngx.socket.tcp
-    local udp_old = ngx.socket.udp
-
-    local dns_no_sync_old = kong_config.dns_no_sync
-
-    package.loaded["socket"] = nil
-    package.loaded["kong.tools.dns"] = nil
-    package.loaded["resty.dns.client"] = nil
-    package.loaded["resty.dns.resolver"] = nil
-
-    ngx.socket.tcp = function(...)
-      local tcp = require("socket").tcp(...)
-      return setmetatable({}, {
-        __newindex = function(_, k, v)
-          tcp[k] = v
-        end,
-        __index = function(_, k)
-          if type(tcp[k]) == "function" then
-            return function(_, ...)
-              if k == "send" then
-                local value = select(1, ...)
-                if type(value) == "table" then
-                  return tcp.send(tcp, table.concat(value))
-                end
-
-                return tcp.send(tcp, ...)
-              end
-
-              return tcp[k](tcp, ...)
-            end
-          end
-
-          return tcp[k]
-        end
-      })
-    end
-
-    ngx.socket.udp = function(...)
-      local udp = require("socket").udp(...)
-      return setmetatable({}, {
-        __newindex = function(_, k, v)
-          udp[k] = v
-        end,
-        __index = function(_, k)
-          if type(udp[k]) == "function" then
-            return function(_, ...)
-              if k == "send" then
-                local value = select(1, ...)
-                if type(value) == "table" then
-                  return udp.send(udp, table.concat(value))
-                end
-
-                return udp.send(udp, ...)
-              end
-
-              return udp[k](udp, ...)
-            end
-          end
-
-          return udp[k]
-        end
-      })
-    end
-
     local dns_tools = require "kong.tools.dns"
-
-    kong_config.dns_no_sync = true
-
     local dns = dns_tools(kong_config)
 
     for i, cp in ipairs(kong_config.cassandra_contact_points) do
@@ -107,16 +28,6 @@ function CassandraConnector.new(kong_config)
         resolved_contact_points[i] = ip
       end
     end
-
-    kong_config.dns_no_sync = dns_no_sync_old
-
-    package.loaded["resty.dns.resolver"] = nil
-    package.loaded["resty.dns.client"] = nil
-    package.loaded["kong.tools.dns"] = nil
-    package.loaded["socket"] = nil
-
-    ngx.socket.udp = udp_old
-    ngx.socket.tcp = tcp_old
   end
 
   if #resolved_contact_points == 0 then
@@ -418,51 +329,6 @@ function CassandraConnector:query(query, args, opts, operation)
       end
     end
   end
-
-  if not conn then
-    coordinator:setkeepalive()
-  end
-
-  if err then
-    return nil, err
-  end
-
-  return res
-end
-
-function CassandraConnector:batch(query_args, opts, operation, logged)
-  if operation ~= nil and operation ~= "read" and operation ~= "write" then
-    error("operation must be 'read' or 'write', was: " .. tostring(operation), 2)
-  end
-
-  if not opts then
-    opts = {}
-  end
-
-  if operation == "write" then
-    opts.consistency = self.opts.write_consistency
-
-  else
-    opts.consistency = self.opts.read_consistency
-  end
-
-  opts.serial_consistency = self.opts.serial_consistency
-
-  opts.logged = logged
-
-  local conn = self:get_stored_connection()
-
-  local coordinator = conn
-
-  if not conn then
-    local err
-    coordinator, err = self.cluster:next_coordinator()
-    if not coordinator then
-      return nil, err
-    end
-  end
-
-  local res, err = coordinator:batch(query_args, opts)
 
   if not conn then
     coordinator:setkeepalive()

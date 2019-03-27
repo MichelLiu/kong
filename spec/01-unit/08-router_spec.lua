@@ -12,7 +12,7 @@ local service = {
 
 local use_case = {
 
-  -- 1. host
+-- host
   {
     service = service,
     route   = {
@@ -24,7 +24,7 @@ local use_case = {
       },
     },
   },
-  -- 2. method
+  -- method
   {
     service = service,
     route   = {
@@ -33,7 +33,7 @@ local use_case = {
       },
     }
   },
-  -- 3. uri
+  -- uri
   {
     service = service,
     route   = {
@@ -42,7 +42,7 @@ local use_case = {
       },
     }
   },
-  -- 4. host + uri
+  -- host + uri
   {
     service = service,
     route   = {
@@ -57,7 +57,7 @@ local use_case = {
       },
     },
   },
-  -- 5. host + method
+  -- host + method
   {
     service = service,
     route   = {
@@ -74,7 +74,7 @@ local use_case = {
       },
     },
   },
-  -- 6. uri + method
+  -- uri + method
   {
     service = service,
     route   = {
@@ -88,7 +88,7 @@ local use_case = {
       },
     }
   },
-  -- 7. host + uri + method
+  -- host + uri + method
   {
     service = service,
     route   = {
@@ -107,14 +107,6 @@ local use_case = {
         "domain-with-uri-2.org"
       },
     },
-  },
-  -- 8. serviceless-route
-  {
-    route   = {
-      paths = {
-        "/serviceless"
-      },
-    }
   },
 }
 
@@ -246,15 +238,6 @@ describe("Router", function()
       assert.same(match_t.matches.method, use_case[7].route.methods[2])
       assert.same(match_t.matches.uri, use_case[7].route.paths[1])
       assert.same(match_t.matches.uri_captures, nil)
-    end)
-
-    it("[serviceless]", function()
-      local match_t = router.select("GET", "/serviceless")
-      assert.truthy(match_t)
-      assert.is_nil(match_t.service)
-      assert.is_nil(match_t.matches.uri_captures)
-      assert.same(use_case[8].route, match_t.route)
-      assert.same(match_t.matches.uri, use_case[8].route.paths[1])
     end)
 
     describe("[uri prefix]", function()

@@ -15,25 +15,21 @@ local reports     = require "kong.reports"
 local balancer    = require "kong.runloop.balancer"
 local mesh        = require "kong.runloop.mesh"
 local constants   = require "kong.constants"
+local semaphore   = require "ngx.semaphore"
 local singletons  = require "kong.singletons"
 local certificate = require "kong.runloop.certificate"
-local concurrency = require "kong.concurrency"
 
 
 local kong        = kong
-local ipairs      = ipairs
 local tostring    = tostring
 local tonumber    = tonumber
 local sub         = string.sub
-local find        = string.find
 local lower       = string.lower
 local fmt         = string.format
 local sort        = table.sort
 local ngx         = ngx
 local log         = ngx.log
 local ngx_now     = ngx.now
-local re_match    = ngx.re.match
-local re_find     = ngx.re.find
 local update_time = ngx.update_time
 local subsystem   = ngx.config.subsystem
 local unpack      = unpack
@@ -45,16 +41,14 @@ local DEBUG       = ngx.DEBUG
 
 
 local CACHE_ROUTER_OPTS = { ttl = 0 }
-local SUBSYSTEMS = constants.PROTOCOLS_WITH_SUBSYSTEM
 local EMPTY_T = {}
-
 
 
 local get_router, build_router
 local server_header = meta._SERVER_TOKENS
 local _set_check_router_rebuild
 
-local build_router_timeout
+local build_router_semaphore
 
 
 local function get_now()
@@ -65,41 +59,15 @@ end
 
 do
   -- Given a protocol, return the subsystem that handles it
+  local protocol_subsystem = {
+    http = "http",
+    https = "http",
+    tcp = "stream",
+    tls = "stream",
+  }
+
   local router
   local router_version
-
-  local function should_process_route(route)
-    for _, protocol in ipairs(route.protocols) do
-      if SUBSYSTEMS[protocol] == subsystem then
-        return true
-      end
-    end
-
-    return false
-  end
-
-  local function get_service_for_route(db, route)
-    local service_pk = route.service
-    if not service_pk then
-      return nil
-    end
-
-    local service, err = db.services:select(service_pk)
-    if not service then
-      return nil, "could not find service for route (" .. route.id .. "): " ..
-                  err
-    end
-
-    -- TODO: this should not be needed as the schema should check it already
-    if SUBSYSTEMS[service.protocol] ~= subsystem then
-      log(WARN, "service with protocol '", service.protocol,
-                "' cannot be used with '", subsystem, "' subsystem")
-
-      return nil
-    end
-
-    return service
-  end
 
   build_router = function(db, version)
     local routes, i = {}, 0
@@ -109,25 +77,26 @@ do
         return nil, "could not load routes: " .. err
       end
 
-      if should_process_route(route) then
-        local service, err = get_service_for_route(db, route)
-        if err then
-          return nil, err
-        end
+      local service_pk = route.service
 
+      if not service_pk then
+        return nil, "route (" .. route.id .. ") is not associated with service"
+      end
+
+      local service, err = db.services:select(service_pk)
+      if not service then
+        return nil, "could not find service for route (" .. route.id .. "): " ..
+                    err
+      end
+
+      local stype = protocol_subsystem[service.protocol]
+      if subsystem == stype then
         local r = {
           route   = route,
           service = service,
         }
 
-        local service_subsystem
-        if service then
-          service_subsystem = SUBSYSTEMS[service.protocol]
-        else
-          service_subsystem = subsystem
-        end
-
-        if service_subsystem == "http" and route.hosts then
+        if stype == "http" and route.hosts then
           -- TODO: headers should probably be moved to route
           r.headers = {
             host = route.hosts,
@@ -216,19 +185,43 @@ do
       return router
     end
 
-    -- wrap router rebuilds in a per-worker mutex:
+    -- wrap router rebuilds in a per-worker mutex (via ngx.semaphore)
     -- this prevents dogpiling the database during rebuilds in
-    -- high-concurrency traffic patterns;
+    -- high-concurrency traffic patterns
     -- requests that arrive on this process during a router rebuild will be
-    -- queued. once the lock is acquired we re-check the
+    -- queued. once the semaphore resource is acquired we re-check the
     -- router version again to prevent unnecessary subsequent rebuilds
 
-    local opts = {
-      name = "build_router",
-      timeout = build_router_timeout,
-      on_timeout = "run_unlocked",
-    }
-    local ok, err = concurrency.with_coroutine_mutex(opts, check_router_rebuild)
+    local timeout = 60
+    if singletons.configuration.database == "cassandra" then
+      -- cassandra_timeout is defined in ms
+      timeout = singletons.configuration.cassandra_timeout / 1000
+
+    elseif singletons.configuration.database == "postgres" then
+      -- pg_timeout is defined in ms
+      timeout = singletons.configuration.pg_timeout / 1000
+    end
+
+    -- acquire lock
+    local lok, err = build_router_semaphore:wait(timeout)
+    if not lok then
+      if err ~= "timeout" then
+        return nil, "error attempting to acquire build_router lock: " .. err
+      end
+
+      log(WARN, "bypassing build_router lock: timeout")
+    end
+
+    local pok, ok, err = pcall(check_router_rebuild)
+
+    if lok then
+      -- release lock
+      build_router_semaphore:post(1)
+    end
+
+    if not pok then
+      return nil, ok
+    end
 
     if not ok then
       return nil, err
@@ -253,16 +246,41 @@ local function balancer_setup_stage1(ctx, scheme, host_type, host, port,
     -- balancer    = nil,       -- the balancer object, if any
     -- hostname    = nil,       -- hostname of the final target IP
     -- hash_cookie = nil,       -- if Upstream sets hash_on_cookie
-    -- balancer_handle = nil,   -- balancer handle for the current connection
   }
 
+  -- TODO: this is probably not optimal
   do
-    local s = service or EMPTY_T
+    local retries = service.retries
+    if retries then
+      balancer_data.retries = retries
 
-    balancer_data.retries         = s.retries         or 5
-    balancer_data.connect_timeout = s.connect_timeout or 60000
-    balancer_data.send_timeout    = s.write_timeout   or 60000
-    balancer_data.read_timeout    = s.read_timeout    or 60000
+    else
+      balancer_data.retries = 5
+    end
+
+    local connect_timeout = service.connect_timeout
+    if connect_timeout then
+      balancer_data.connect_timeout = connect_timeout
+
+    else
+      balancer_data.connect_timeout = 60000
+    end
+
+    local send_timeout = service.write_timeout
+    if send_timeout then
+      balancer_data.send_timeout = send_timeout
+
+    else
+      balancer_data.send_timeout = 60000
+    end
+
+    local read_timeout = service.read_timeout
+    if read_timeout then
+      balancer_data.read_timeout = read_timeout
+
+    else
+      balancer_data.read_timeout = 60000
+    end
   end
 
   ctx.service          = service
@@ -300,7 +318,7 @@ end
 -- in the table below the `before` and `after` is to indicate when they run:
 -- before or after the plugins
 return {
-  build_router = build_router,
+  build_router     = build_router,
 
   -- exported for unit-testing purposes only
   _set_check_router_rebuild = _set_check_router_rebuild,
@@ -440,18 +458,18 @@ return {
         local operation = data.operation
         local target = data.entity
         -- => to worker_events node handler
-        local _, err = worker_events.post("balancer", "targets", {
+        local ok, err = worker_events.post("balancer", "targets", {
           operation = data.operation,
           entity = data.entity,
         })
-        if err then
+        if not ok then
           log(ERR, "failed broadcasting target ",
               operation, " to workers: ", err)
         end
         -- => to cluster_events handler
         local key = fmt("%s:%s", operation, target.upstream.id)
-        _, err = cluster_events:broadcast("balancer:targets", key)
-        if err then
+        ok, err = cluster_events:broadcast("balancer:targets", key)
+        if not ok then
           log(ERR, "failed broadcasting target ", operation, " to cluster: ", err)
         end
       end, "crud", "targets")
@@ -471,13 +489,13 @@ return {
       cluster_events:subscribe("balancer:targets", function(data)
         local operation, key = unpack(utils.split(data, ":"))
         -- => to worker_events node handler
-        local _, err = worker_events.post("balancer", "targets", {
+        local ok, err = worker_events.post("balancer", "targets", {
           operation = operation,
           entity = {
             upstream = { id = key },
           }
         })
-        if err then
+        if not ok then
           log(ERR, "failed broadcasting target ", operation, " to workers: ", err)
         end
       end)
@@ -489,8 +507,8 @@ return {
         local ip, port, health, id, name = data:match(pattern)
         port = tonumber(port)
         local upstream = { id = id, name = name }
-        local _, err = balancer.post_health(upstream, ip, port, health == "1")
-        if err then
+        local ok, err = balancer.post_health(upstream, ip, port, health == "1")
+        if not ok then
           log(ERR, "failed posting health of ", name, " to workers: ", err)
         end
       end)
@@ -504,17 +522,17 @@ return {
         local operation = data.operation
         local upstream = data.entity
         -- => to worker_events node handler
-        local _, err = worker_events.post("balancer", "upstreams", {
+        local ok, err = worker_events.post("balancer", "upstreams", {
           operation = data.operation,
           entity = data.entity,
         })
-        if err then
+        if not ok then
           log(ERR, "failed broadcasting upstream ",
               operation, " to workers: ", err)
         end
         -- => to cluster_events handler
         local key = fmt("%s:%s:%s", operation, upstream.id, upstream.name)
-        local ok, err = cluster_events:broadcast("balancer:upstreams", key)
+        ok, err = cluster_events:broadcast("balancer:upstreams", key)
         if not ok then
           log(ERR, "failed broadcasting upstream ", operation, " to cluster: ", err)
         end
@@ -534,14 +552,14 @@ return {
       cluster_events:subscribe("balancer:upstreams", function(data)
         local operation, id, name = unpack(utils.split(data, ":"))
         -- => to worker_events node handler
-        local _, err = worker_events.post("balancer", "upstreams", {
+        local ok, err = worker_events.post("balancer", "upstreams", {
           operation = operation,
           entity = {
             id = id,
             name = name,
           }
         })
-        if err then
+        if not ok then
           log(ERR, "failed broadcasting upstream ", operation, " to workers: ", err)
         end
       end)
@@ -552,17 +570,15 @@ return {
         balancer.init()
       end)
 
-
       do
-        build_router_timeout = 60
-        if singletons.configuration.database == "cassandra" then
-          -- cassandra_timeout is defined in ms
-          build_router_timeout = kong.configuration.cassandra_timeout / 1000
+        local err
 
-        elseif singletons.configuration.database == "postgres" then
-          -- pg_timeout is defined in ms
-          build_router_timeout = kong.configuration.pg_timeout / 1000
+        build_router_semaphore, err = semaphore.new()
+        if err then
+          log(ngx.CRIT, "failed to create build_router_semaphore: ", err)
         end
+
+        build_router_semaphore:post(1)
       end
     end
   },
@@ -635,29 +651,16 @@ return {
 
       ctx.KONG_PREREAD_START = get_now()
 
-      local route = match_t.route
-      local service = match_t.service
+      local api = match_t.api or EMPTY_T
+      local route = match_t.route or EMPTY_T
+      local service = match_t.service or EMPTY_T
       local upstream_url_t = match_t.upstream_url_t
-
-      if not service then
-        -----------------------------------------------------------------------
-        -- Serviceless stream route
-        -----------------------------------------------------------------------
-        local service_scheme = ssl_termination_ctx and "tls" or "tcp"
-        local service_host   = var.server_addr
-
-        match_t.upstream_scheme = service_scheme
-        upstream_url_t.scheme = service_scheme -- for completeness
-        upstream_url_t.type = utils.hostname_type(service_host)
-        upstream_url_t.host = service_host
-        upstream_url_t.port = tonumber(var.server_port, 10)
-      end
 
       balancer_setup_stage1(ctx, match_t.upstream_scheme,
                             upstream_url_t.type,
                             upstream_url_t.host,
                             upstream_url_t.port,
-                            service, route)
+                            service, route, api)
     end,
     after = function(ctx)
       local ok, err, errcode = balancer_setup_stage2(ctx)
@@ -698,13 +701,9 @@ return {
         return kong.response.exit(404, { message = "no Route matched with those values" })
       end
 
-      local scheme         = var.scheme
-      local host           = var.host
-      local port           = tonumber(var.server_port, 10)
-
-      local route          = match_t.route
-      local service        = match_t.service
-      local upstream_url_t = match_t.upstream_url_t
+      local route              = match_t.route or EMPTY_T
+      local service            = match_t.service or EMPTY_T
+      local upstream_url_t     = match_t.upstream_url_t
 
       local realip_remote_addr = var.realip_remote_addr
       local forwarded_proto
@@ -722,123 +721,23 @@ return {
 
       local trusted_ip = kong.ip.is_trusted(realip_remote_addr)
       if trusted_ip then
-        forwarded_proto = var.http_x_forwarded_proto or scheme
-        forwarded_host  = var.http_x_forwarded_host  or host
-        forwarded_port  = var.http_x_forwarded_port  or port
+        forwarded_proto = var.http_x_forwarded_proto or var.scheme
+        forwarded_host  = var.http_x_forwarded_host  or var.host
+        forwarded_port  = var.http_x_forwarded_port  or var.server_port
 
       else
-        forwarded_proto = scheme
-        forwarded_host  = host
-        forwarded_port  = port
+        forwarded_proto = var.scheme
+        forwarded_host  = var.host
+        forwarded_port  = var.server_port
       end
 
       local protocols = route.protocols
-      if (protocols and protocols.https and not protocols.http and
-          forwarded_proto ~= "https")
+      if (protocols and
+          protocols.https and not protocols.http and forwarded_proto ~= "https")
       then
         ngx.header["connection"] = "Upgrade"
         ngx.header["upgrade"]    = "TLS/1.2, HTTP/1.1"
         return kong.response.exit(426, { message = "Please use HTTPS protocol" })
-      end
-
-      if not service then
-        -----------------------------------------------------------------------
-        -- Serviceless HTTP / HTTPS / HTTP2 route
-        -----------------------------------------------------------------------
-        local service_scheme
-        local service_host
-        local service_port
-
-        -- 1. try to find information from a request-line
-        local request_line = var.request
-        if request_line then
-          local matches, err = re_match(request_line, [[\w+ (https?)://([^/?#\s]+)]], "ajos")
-          if err then
-            log(WARN, "pcre runtime error when matching a request-line: ", err)
-
-          elseif matches then
-            local uri_scheme = lower(matches[1])
-            if uri_scheme == "https" or uri_scheme == "http" then
-              service_scheme = uri_scheme
-              service_host   = lower(matches[2])
-            end
-            --[[ TODO: check if these make sense here?
-            elseif uri_scheme == "wss" then
-              service_scheme = "https"
-              service_host   = lower(matches[2])
-            elseif uri_scheme == "ws" then
-              service_scheme = "http"
-              service_host   = lower(matches[2])
-            end
-            --]]
-          end
-        end
-
-        -- 2. try to find information from a host header
-        if not service_host then
-          local http_host = var.http_host
-          if http_host then
-            service_scheme = scheme
-            service_host   = lower(http_host)
-          end
-        end
-
-        -- 3. split host to host and port
-        if service_host then
-          -- remove possible userinfo
-          local pos = find(service_host, "@", 1, true)
-          if pos then
-            service_host = sub(service_host, pos + 1)
-          end
-
-          pos = find(service_host, ":", 2, true)
-          if pos then
-            service_port = sub(service_host, pos + 1)
-            service_host = sub(service_host, 1, pos - 1)
-
-            local found, _, err = re_find(service_port, [[[1-9]{1}\d{0,4}$]], "adjo")
-            if err then
-              log(WARN, "pcre runtime error when matching a port number: ", err)
-
-            elseif found then
-              service_port = tonumber(service_port, 10)
-              if not service_port or service_port > 65535 then
-                service_scheme = nil
-                service_host   = nil
-                service_port   = nil
-              end
-
-            else
-              service_scheme = nil
-              service_host   = nil
-              service_port   = nil
-            end
-          end
-        end
-
-        -- 4. use known defaults
-        if service_host and not service_port then
-          if service_scheme == "http" then
-            service_port = 80
-          elseif service_scheme == "https" then
-            service_port = 443
-          else
-            service_port = port
-          end
-        end
-
-        -- 5. fall-back to server address
-        if not service_host then
-          service_scheme = scheme
-          service_host   = var.server_addr
-          service_port   = port
-        end
-
-        match_t.upstream_scheme = service_scheme
-        upstream_url_t.scheme = service_scheme -- for completeness
-        upstream_url_t.type = utils.hostname_type(service_host)
-        upstream_url_t.host = service_host
-        upstream_url_t.port = service_port
       end
 
       balancer_setup_stage1(ctx, match_t.upstream_scheme,
@@ -984,9 +883,9 @@ return {
       local ok, err = cookie:set(hash_cookie)
 
       if not ok then
-        log(WARN, "failed to set the cookie for hash-based load balancing: ", err,
-                  " (key=", hash_cookie.key,
-                  ", path=", hash_cookie.path, ")")
+        log(ngx.WARN, "failed to set the cookie for hash-based load balancing: ", err,
+                      " (key=", hash_cookie.key,
+                      ", path=", hash_cookie.path, ")")
       end
     end,
     after = function(ctx)
@@ -1044,15 +943,14 @@ return {
       -- Report HTTP status for health checks
       local balancer_data = ctx.balancer_data
       if balancer_data and balancer_data.balancer and balancer_data.ip then
+        local ip, port = balancer_data.ip, balancer_data.port
+
         local status = ngx.status
         if status == 504 then
-          balancer_data.balancer.report_timeout(balancer_data.balancer_handle)
+          balancer_data.balancer.report_timeout(ip, port)
         else
-          balancer_data.balancer.report_http_status(
-            balancer_data.balancer_handle, status)
+          balancer_data.balancer.report_http_status(ip, port, status)
         end
-        -- release the handle, so the balancer can update its statistics
-        balancer_data.balancer_handle:release()
       end
     end
   }

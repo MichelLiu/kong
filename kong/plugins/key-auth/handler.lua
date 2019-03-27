@@ -143,7 +143,7 @@ local function do_authentication(conf)
   end
 
   -- this request is missing an API key, HTTP 401
-  if not key or key == "" then
+  if not key then
     kong.response.set_header("WWW-Authenticate", _realm)
     return nil, { status = 401, message = "No API key found in request" }
   end
@@ -160,9 +160,9 @@ local function do_authentication(conf)
     return kong.response.exit(500, "An unexpected error occurred")
   end
 
-  -- no credential in DB, for this key, it is invalid, HTTP 401
+  -- no credential in DB, for this key, it is invalid, HTTP 403
   if not credential then
-    return nil, { status = 401, message = "Invalid authentication credentials" }
+    return nil, { status = 403, message = "Invalid authentication credentials" }
   end
 
   -----------------------------------------

@@ -1,18 +1,18 @@
-local admin_api = require "spec.fixtures.admin_api"
 local helpers = require "spec.helpers"
+local admin_api = require "spec.fixtures.admin_api"
 local cjson   = require "cjson"
 
 
-local function insert_routes(bp, routes)
-  if type(bp) ~= "table" then
-    return error("expected arg #1 to be a table", 2)
-  end
-  if type(routes) ~= "table" then
-    return error("expected arg #2 to be a table", 2)
-  end
+local function next_second()
+  ngx.update_time()
+  local now = ngx.now()
+  ngx.sleep(1 - (now - math.floor(now)))
+end
 
-  if not bp.done then -- strategy ~= "off"
-    bp = admin_api
+
+local function insert_routes(routes)
+  if type(routes) ~= "table" then
+    return error("expected arg #1 to be a table", 2)
   end
 
   for i = 1, #routes do
@@ -31,7 +31,7 @@ local function insert_routes(bp, routes)
       service.protocol = helpers.mock_upstream_protocol
     end
 
-    service = bp.named_services:insert(service)
+    service = admin_api.named_services:insert(service)
     route.service = service
 
     if not route.protocol then
@@ -39,38 +39,17 @@ local function insert_routes(bp, routes)
     end
 
     route.service = service
-    route = bp.routes:insert(route)
+    route = admin_api.routes:insert(route)
     route.service = service
 
     routes[i] = route
   end
 
-  if bp.done then
-    local declarative = require "kong.db.declarative"
-
-    local cfg = bp.done()
-    local yaml = declarative.to_yaml_string(cfg)
-    local admin_client = helpers.admin_client()
-    local res = assert(admin_client:send {
-      method  = "POST",
-      path    = "/config",
-      body    = {
-        config = yaml,
-      },
-      headers = {
-        ["Content-Type"] = "multipart/form-data",
-      }
-    })
-    assert.res_status(201, res)
-    admin_client:close()
-
-  end
-
   return routes
 end
 
-local function remove_routes(strategy, routes)
-  if strategy == "off" or not routes then
+local function remove_routes(routes)
+  if not routes then
     return
   end
 
@@ -96,10 +75,9 @@ end
 for _, strategy in helpers.each_strategy() do
   describe("Router [#" .. strategy .. "]" , function()
     local proxy_client
-    local bp
 
     lazy_setup(function()
-      bp = helpers.get_db_utils(strategy, {
+      helpers.get_db_utils(strategy, {
         "routes",
         "services",
         "apis",
@@ -147,7 +125,7 @@ for _, strategy in helpers.each_strategy() do
       local first_service_name
 
       lazy_setup(function()
-        routes = insert_routes(bp, {
+        routes = insert_routes {
           {
             methods    = { "GET" },
             protocols  = { "http" },
@@ -183,12 +161,12 @@ for _, strategy in helpers.each_strategy() do
               path     = "/anything",
             },
           },
-        })
+        }
         first_service_name = routes[1].service.name
       end)
 
       lazy_teardown(function()
-        remove_routes(strategy, routes)
+        remove_routes(routes)
       end)
 
       it("restricts an route to its methods if specified", function()
@@ -340,12 +318,11 @@ for _, strategy in helpers.each_strategy() do
     end)
 
     describe("URI regexes order of evaluation with created_at", function()
-      local routes
+      local routes1, routes2, routes3
 
       lazy_setup(function()
-        routes = insert_routes(bp, {
+        routes1 = insert_routes {
           {
-            created_at = 1234567890,
             strip_path = true,
             paths      = { "/status/(re)" },
             service    = {
@@ -353,17 +330,25 @@ for _, strategy in helpers.each_strategy() do
               path     = "/status/200",
             },
           },
+        }
+
+        next_second()
+
+        routes2 = insert_routes {
           {
-            created_at = 1234567891,
             strip_path = true,
             paths      = { "/status/(r)" },
             service    = {
               name     = "regex_2",
               path     = "/status/200",
             },
-          },
+          }
+        }
+
+        next_second()
+
+        routes3 = insert_routes {
           {
-            created_at = 1234567892,
             strip_path = true,
             paths      = { "/status" },
             service    = {
@@ -371,11 +356,13 @@ for _, strategy in helpers.each_strategy() do
               path     = "/status/200",
             },
           }
-        })
+        }
       end)
 
       lazy_teardown(function()
-        remove_routes(strategy, routes)
+        remove_routes(routes1)
+        remove_routes(routes2)
+        remove_routes(routes3)
       end)
 
       it("depends on created_at field", function()
@@ -386,9 +373,9 @@ for _, strategy in helpers.each_strategy() do
         })
         assert.res_status(200, res)
 
-        assert.equal(routes[2].id,           res.headers["kong-route-id"])
-        assert.equal(routes[2].service.id,   res.headers["kong-service-id"])
-        assert.equal(routes[2].service.name, res.headers["kong-service-name"])
+        assert.equal(routes2[1].id,           res.headers["kong-route-id"])
+        assert.equal(routes2[1].service.id,   res.headers["kong-service-id"])
+        assert.equal(routes2[1].service.name, res.headers["kong-service-name"])
 
         res = assert(proxy_client:send {
           method  = "GET",
@@ -397,20 +384,19 @@ for _, strategy in helpers.each_strategy() do
         })
         assert.res_status(200, res)
 
-        assert.equal(routes[1].id,           res.headers["kong-route-id"])
-        assert.equal(routes[1].service.id,   res.headers["kong-service-id"])
-        assert.equal(routes[1].service.name, res.headers["kong-service-name"])
+        assert.equal(routes1[1].id,           res.headers["kong-route-id"])
+        assert.equal(routes1[1].service.id,   res.headers["kong-service-id"])
+        assert.equal(routes1[1].service.name, res.headers["kong-service-name"])
       end)
     end)
 
     describe("URI regexes order of evaluation with regex_priority", function()
-      local routes
-
+      local routes = {}
       lazy_setup(function()
-        routes = insert_routes(bp, {
 
-          -- TEST 1 (regex_priority)
+        -- TEST 1 (regex_priority)
 
+        routes[1] = insert_routes {
           {
             strip_path = true,
             paths      = { "/status/(?<foo>re)" },
@@ -419,7 +405,10 @@ for _, strategy in helpers.each_strategy() do
               path     = "/status/200",
             },
             regex_priority = 0,
-          },
+          }
+        }
+
+        routes[2] = insert_routes {
           {
             strip_path = true,
             paths      = { "/status/(re)" },
@@ -429,11 +418,12 @@ for _, strategy in helpers.each_strategy() do
             },
             regex_priority = 4, -- shadows service which is created before and is shorter
           },
+        }
 
-          -- TEST 2 (tie breaker by created_at)
+        -- TEST 2 (tie breaker by created_at)
 
+        routes[3] = insert_routes {
           {
-            created_at = 1234567890,
             strip_path = true,
             paths      = { "/status/(ab)" },
             service    = {
@@ -441,9 +431,13 @@ for _, strategy in helpers.each_strategy() do
               path     = "/status/200",
             },
             regex_priority = 0,
-          },
+          }
+        }
+
+        next_second()
+
+        routes[4] = insert_routes {
           {
-            created_at = 1234567891,
             strip_path = true,
             paths      = { "/status/(ab)c?" },
             service    = {
@@ -452,11 +446,13 @@ for _, strategy in helpers.each_strategy() do
             },
             regex_priority = 0,
           },
-        })
+        }
       end)
 
       lazy_teardown(function()
-        remove_routes(strategy, routes)
+        for _, r in ipairs(routes) do
+          remove_routes(r)
+        end
       end)
 
       it("depends on the regex_priority field", function()
@@ -484,15 +480,15 @@ for _, strategy in helpers.each_strategy() do
       local routes
 
       lazy_setup(function()
-        routes = insert_routes(bp, {
+        routes = insert_routes {
           {
             hosts = { "mock_upstream" },
           },
-        })
+        }
       end)
 
       lazy_teardown(function()
-        remove_routes(strategy, routes)
+        remove_routes(routes)
       end)
 
       it("preserves URI arguments", function()
@@ -547,7 +543,7 @@ for _, strategy in helpers.each_strategy() do
       local routes
 
       lazy_setup(function()
-        routes = insert_routes(bp, {
+        routes = insert_routes {
           {
             strip_path = true,
             paths      = { "/endel%C3%B8st" },
@@ -556,11 +552,11 @@ for _, strategy in helpers.each_strategy() do
             strip_path = true,
             paths      = { "/foo/../bar" },
           },
-        })
+        }
       end)
 
       lazy_teardown(function()
-        remove_routes(strategy, routes)
+        remove_routes(routes)
       end)
 
       it("routes when [paths] is percent-encoded", function()
@@ -596,16 +592,16 @@ for _, strategy in helpers.each_strategy() do
       local routes
 
       lazy_setup(function()
-        routes = insert_routes(bp, {
+        routes = insert_routes {
           {
             paths      = { "/x/y/z", "/z/y/x" },
             strip_path = true,
           },
-        })
+        }
       end)
 
       lazy_teardown(function()
-        remove_routes(strategy, routes)
+        remove_routes(routes)
       end)
 
       describe("= true", function()
@@ -657,7 +653,7 @@ for _, strategy in helpers.each_strategy() do
       local routes
 
       lazy_setup(function()
-        routes = insert_routes(bp, {
+        routes = insert_routes {
           {
             preserve_host = true,
             hosts         = { "preserved.com" },
@@ -677,12 +673,12 @@ for _, strategy in helpers.each_strategy() do
             preserve_host = true,
             paths         = { "/request" },
           }
-        })
+        }
 
       end)
 
       lazy_teardown(function()
-        remove_routes(strategy, routes)
+        remove_routes(routes)
       end)
 
       describe("x = false (default)", function()
@@ -768,7 +764,7 @@ for _, strategy in helpers.each_strategy() do
       local routes
 
       lazy_setup(function()
-        routes = insert_routes(bp, {
+        routes = insert_routes {
           {
             strip_path = true,
             paths      = { "/" },
@@ -777,11 +773,11 @@ for _, strategy in helpers.each_strategy() do
             strip_path = true,
             paths      = { "/foobar" },
           },
-        })
+        }
       end)
 
       lazy_teardown(function()
-        remove_routes(strategy, routes)
+        remove_routes(routes)
       end)
 
       it("root / [uri] for a catch-all rule", function()
@@ -815,7 +811,7 @@ for _, strategy in helpers.each_strategy() do
       local routes
 
       lazy_setup(function()
-        routes = insert_routes(bp, {
+        routes = insert_routes {
           {
             strip_path = true,
             methods    = { "GET" },
@@ -826,11 +822,11 @@ for _, strategy in helpers.each_strategy() do
             methods    = { "GET" },
             paths      = { "/root/fixture" },
           },
-        })
+        }
       end)
 
       lazy_teardown(function()
-        remove_routes(strategy, routes)
+        remove_routes(routes)
       end)
 
       it("prioritizes longer URIs", function()
@@ -854,7 +850,7 @@ for _, strategy in helpers.each_strategy() do
       local routes
 
       lazy_setup(function()
-        routes = insert_routes(bp, {
+        routes = insert_routes {
           {
             strip_path = true,
             hosts      = { "route.com" },
@@ -865,11 +861,11 @@ for _, strategy in helpers.each_strategy() do
             hosts      = { "route.com" },
             paths      = { "/root/fixture" },
           },
-        })
+        }
       end)
 
       lazy_teardown(function()
-        remove_routes(strategy, routes)
+        remove_routes(routes)
       end)
 
       it("prioritizes longer URIs", function()
@@ -978,33 +974,31 @@ for _, strategy in helpers.each_strategy() do
       }
 
       describe("(plain)", function()
-        local routes
-
+        local routes = {}
         lazy_setup(function()
-          routes = {}
 
           for i, args in ipairs(checks) do
-            routes[i] = {
-              strip_path   = args[5],
-              paths        = args[2] and {
-                args[2],
-              } or nil,
-              hosts        = {
-                "localbin-" .. i .. ".com",
-              },
-              service = {
-                name = "plain_" .. i,
-                path = args[1]
+            routes[i] = insert_routes {
+              {
+                strip_path   = args[5],
+                paths        = args[2] and {
+                  args[2],
+                } or nil,
+                hosts        = {
+                  "localbin-" .. i .. ".com",
+                },
+                service = {
+                  name = "plain_" .. i,
+                  path = args[1]
+                }
               }
             }
           end
-
-          routes = insert_routes(bp, routes)
         end)
 
         lazy_teardown(function()
           for _, r in ipairs(routes) do
-            remove_routes(strategy, r)
+            remove_routes(r)
           end
         end)
 
@@ -1043,32 +1037,32 @@ for _, strategy in helpers.each_strategy() do
           return "/[0]?" .. path:sub(2, -1)
         end
 
-        local routes
+        local routes = {}
 
         lazy_setup(function()
-          routes = {}
-
           for i, args in ipairs(checks) do
-            routes[i] = {
-              strip_path   = args[5],
-              paths        = args[2] and {
-                make_a_regex(args[2]),
-              } or nil,
-              hosts        = {
-                "localbin-" .. i .. ".com",
-              },
-              service = {
-                name = "make_regex_" .. i,
-                path = args[1]
+            routes[i] = assert(insert_routes {
+              {
+                strip_path   = args[5],
+                paths        = args[2] and {
+                  make_a_regex(args[2]),
+                } or nil,
+                hosts        = {
+                  "localbin-" .. i .. ".com",
+                },
+                service = {
+                  name = "make_regex_" .. i,
+                  path = args[1]
+                }
               }
-            }
+            })
           end
-
-          routes = insert_routes(bp, routes)
         end)
 
         lazy_teardown(function()
-          remove_routes(strategy, routes)
+          for _, r in ipairs(routes) do
+            remove_routes(r)
+          end
         end)
 
         local function check(i, request_uri, expected_uri)
@@ -1113,7 +1107,7 @@ for _, strategy in helpers.each_strategy() do
         it("when Routes have 'regex_priority = nil'", function()
           -- Regression test for issue:
           -- https://github.com/Kong/kong/issues/4254
-          routes = insert_routes(bp, {
+          routes = insert_routes {
             {
               methods = { "GET" },
               regex_priority = 1,
@@ -1122,7 +1116,7 @@ for _, strategy in helpers.each_strategy() do
               methods = { "POST", "PUT" },
               regex_priority = ngx.null,
             },
-          })
+          }
 
           local res = assert(proxy_client:send {
             method  = "GET",
