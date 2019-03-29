@@ -253,7 +253,7 @@ function _mt:query(sql)
     end
   end
   if err then
-    logger.verbose("sql:" .. sql .. " err:" .. cjson.encode(err))
+    ngx.log(ngx.ERR,"sql:" .. sql .. " err:" .. cjson.encode(err))
   end
   if #ml > 0 then
     res = ml[#ml-1]
@@ -286,7 +286,7 @@ function _mt:query(sql)
     end
   end
 
-  logger.verbose("anssas:" .. cjson.encode(res) .. " tostring:" .. tostring(connection.state))
+  logger.verbose("queryMysql:" .. tostring(sql) .. " result-->" .. cjson.encode(res))
   setkeepalive(connection)
 
   return res, err
@@ -510,8 +510,8 @@ function _mt:schema_bootstrap(kong_config, default_locks_ttl)
       `key`            varchar(256),
       `subsystem`      varchar(256),
       `last_executed`  TEXT,
-      `executed`       TEXT,
-      `pending`        TEXT,
+      `executed`       VARCHAR(256) DEFAULT '[]',
+      `pending`        VARCHAR(256) DEFAULT '[]',
 
       PRIMARY KEY (`key`, `subsystem`)
     );
@@ -593,26 +593,40 @@ function _mt:record_migration(subsystem, name, state)
 
   local key_escaped  = self:escape_literal("schema_meta")
   local subsystem_escaped = self:escape_literal(subsystem)
+
+  local executed = {}
+  local pending = {}
+  local migrationsList,err = self:schema_migrations()
+  for _, row in ipairs(migrationsList) do
+    if row.subsystem == subsystem then
+      executed = row.executed
+      table.insert(executed,name)
+      pending = row.pending
+      table.insert(pending,name)
+    end
+  end
+
   local name_escaped = self:escape_literal(name)
-  local name_array   = self:escape_literal(cjson.encode({ name }))
+  local executed_str   = self:escape_literal(cjson.encode(executed))
+  local pending_str   = self:escape_literal(cjson.encode(pending))
 
   local sql
   if state == "executed" then
     sql = concat({
       "REPLACE INTO schema_meta (`key`, `subsystem`, `last_executed`, `executed`)\n",
-      "     VALUES (", key_escaped, ", ", subsystem_escaped, ", ", name_escaped, ", ", name_array, ");\n",
+      "     VALUES (", key_escaped, ", ", subsystem_escaped, ", ", name_escaped, ", ", executed_str, ");\n",
     })
 
   elseif state == "pending" then
     sql = concat({
       "REPLACE INTO schema_meta (`key`, `subsystem`, `pending`)\n",
-      "     VALUES (", key_escaped, ", ", subsystem_escaped, ", ", name_array, ");\n",
+      "     VALUES (", key_escaped, ", ", subsystem_escaped, ", ", pending_str, ");\n",
     })
 
   elseif state == "teardown" then
     sql = concat({
       "REPLACE INTO schema_meta (`key`, `subsystem`, `last_executed`, `executed`)\n",
-      "     VALUES (", key_escaped, ", ", subsystem_escaped, ", ", name_escaped, ", ", name_array, ");\n",
+      "     VALUES (", key_escaped, ", ", subsystem_escaped, ", ", name_escaped, ", ", executed_str, ");\n",
     })
 
   else

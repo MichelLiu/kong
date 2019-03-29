@@ -123,6 +123,8 @@ return {
         PRIMARY KEY (api_id, identifier, period_date, period)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8 ROW_FORMAT=DYNAMIC;
 
+      DROP FUNCTION IF EXISTS increment_response_rate_limits;
+
       CREATE  FUNCTION increment_response_rate_limits(a_id varchar(50), i varchar(200), p varchar(100), p_date timestamp  , v integer) RETURNS INT  
         BEGIN
           IF EXISTS(SELECT * FROM response_ratelimiting_metrics WHERE api_id = a_id AND identifier = i AND period = p AND period_date = p_date ) THEN

@@ -4,6 +4,7 @@ local mysql = require "kong.tools.mysql"
 
 local max          = math.max
 local fmt          = string.format
+local null         = ngx.null
 local concat       = table.concat
 local setmetatable = setmetatable
 local new_tab
@@ -34,9 +35,9 @@ local _M = {}
 local mt = { __index = _M }
 
 
-function _M.new(dao_factory, page_size, event_ttl)
+function _M.new(db, page_size, event_ttl)
   local self  = {
-    db        = dao_factory.db,
+    db        = db.connector,
     --page_size = page_size,
     event_ttl = event_ttl,
   }

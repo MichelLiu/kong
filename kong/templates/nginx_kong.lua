@@ -110,7 +110,7 @@ server {
 > end
 
     # injected nginx_proxy_* directives
-> for _, el in ipairs(nginx_proxy_directives)  do
+> for _, el in ipairs(nginx_proxy_directives) do
     $(el.name) $(el.value);
 > end
 

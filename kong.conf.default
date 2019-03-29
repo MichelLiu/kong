@@ -58,7 +58,7 @@
                                           # logs. The granularity of these logs
                                           # is adjusted by the `log_level`
                                           # directive.
-plugins = acl,aws-lambda,basic-auth,bot-detection,correlation-id,cors,datadog,file-log,hmac-auth,http-log,ip-restriction,jwt,key-auth,ldap-auth,log-buffering,log-serializers,loggly,oauth2,rate-limiting,request-size-limiting,request-termination,request-transformer,response-ratelimiting,response-transformer,statsd,syslog,tcp-log,udp-log
+plugins = acl,aws-lambda,basic-auth,bot-detection,correlation-id,cors,datadog,file-log,hmac-auth,http-log,ip-restriction,jwt,key-auth,ldap-auth,loggly,oauth2,rate-limiting,request-size-limiting,request-termination,request-transformer,response-ratelimiting,response-transformer,statsd,syslog,tcp-log,udp-log
 #plugins = bundled               # Comma-separated list of plugins this node
                                  # should load. By default, only plugins
                                  # bundled in official distributions are

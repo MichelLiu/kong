@@ -19,6 +19,8 @@ local load          = load
 local find          = string.find
 local rep           = string.rep
 local sub           = string.sub
+local gsub = string.gsub
+local string_len = string.len
 local max           = math.max
 local min           = math.min
 local log           = ngx.log
@@ -311,7 +313,7 @@ local function escape_literal(connector, val, field)
     elseif t_val == "boolean" then
       return val and "TRUE" or "FALSE"
     elseif t_val == "table" then
-      if field and (field.type == "table" or field.type == "array" or field.type == "set") then
+      if field and (field.type == "record" or field.type == "table" or field.type == "array" or field.type == "set") then
         return connector:escape_literal(cjson.encode(val))
       end
     end
@@ -518,9 +520,10 @@ local function execute(strategy, statement_name, attributes, is_update)
   local argc   = statement.argc
 
   clear_tab(argv)
-
+  local service_id = ''
   for i = 1, argc do
     local name  = argn[i]
+
     local value
 
     if i == argc and is_update and attributes[UNIQUE] then
@@ -528,17 +531,41 @@ local function execute(strategy, statement_name, attributes, is_update)
 
     else
       value = attributes[name]
+      if value == nil and type(name) == "string" then
+        if type(attributes[gsub(name,"_id","")]) == "table" then
+          value = attributes[gsub(name,"_id","")]["id"]
+          if name == "route_id" then
+            local saml = "SELECT service_id FROM routes WHERE `id`=" ..escape_literal(connector, value)
+            local sinfo,errInfo = connector:query(saml)
+            if sinfo then
+              service_id = sinfo[1]["service_id"]
+            end
+          end
+        end
+      end
     end
 
     if value == nil and is_update then
       argv[i] = escape_identifier(connector, name)
-
     else
       argv[i] = escape_literal(connector, value, fields[name])
+      if type(name) == "string" and name == "service_id" and not value then
+        argv[i] = escape_literal(connector, service_id)
+      end
     end
   end
 
   local sql = statement.make(argv)
+  if string_len(service_id) > 0 and statement_name == "insert" then
+    sql = concat {
+      "BEGIN;\n",
+      "SET FOREIGN_KEY_CHECKS=0;\n",
+      sql,"\n",
+      "SET FOREIGN_KEY_CHECKS=1;\n",
+      "COMMIT;\n",
+    }
+  end
+
   local result,err = connector:query(sql)
   return result,err
 end
@@ -554,12 +581,12 @@ local function page(self, size, token, foreign_key, foreign_entity_name)
 
   if token then
     if foreign_entity_name then
-      statement_name = concat({ "for", foreign_entity_name, "page_next" }, "_")
+      statement_name = concat({ "page_for", foreign_entity_name, "next" }, "_")
       attributes     = {
         [foreign_entity_name] = foreign_key,
         [LIMIT]               = limit,
       }
-
+      
     else
       statement_name = "page_next"
       attributes     = {
@@ -580,10 +607,10 @@ local function page(self, size, token, foreign_key, foreign_entity_name)
     for i, field_name in ipairs(self.schema.primary_key) do
       attributes[field_name] = token_decoded[i]
     end
-
+    
   else
     if foreign_entity_name then
-      statement_name = concat({ "for", foreign_entity_name, "page_first" }, "_")
+      statement_name = concat({ "page_for", foreign_entity_name, "first" }, "_")
       attributes     = {
         [foreign_entity_name] = foreign_key,
         [LIMIT]               = limit,
@@ -1445,20 +1472,20 @@ function _M.new(connector, schema, errors)
         "   LIMIT $", argc_next, ";"
       }
 
-      local statement_name = "for_" .. foreign_entity_name
+      local statement_name = "page_for_" .. foreign_entity_name
 
-      statements[statement_name .. "_page_first"] = {
+      statements[statement_name .. "_first"] = {
         argn = argn_first,
         argc = argc_first,
         argv = argv_first,
-        make = compile(concat({ table_name, statement_name, "page_first" }, "_"), page_first_statement)
+        make = compile(concat({ table_name, statement_name, "first" }, "_"), page_first_statement)
       }
 
-      statements[statement_name .. "_page_next"] = {
+      statements[statement_name .. "_next"] = {
         argn = argn_next,
         argc = argc_next,
         argv = argv_next,
-        make = compile(concat({ table_name, statement_name, "page_next" }, "_"), page_next_statement)
+        make = compile(concat({ table_name, statement_name, "next" }, "_"), page_next_statement)
       }
 
       self[statement_name] = make_select_for(foreign_entity_name)
