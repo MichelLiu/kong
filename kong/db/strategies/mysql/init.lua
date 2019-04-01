@@ -10,6 +10,7 @@ local encode_array  = cjson.encode
 local encode_json   = cjson.encode
 local setmetatable  = setmetatable
 local concat        = table.concat
+local insert        = table.insert
 local ipairs        = ipairs
 local pairs         = pairs
 local error         = error
@@ -19,8 +20,8 @@ local load          = load
 local find          = string.find
 local rep           = string.rep
 local sub           = string.sub
-local gsub = string.gsub
-local string_len = string.len
+local gsub          = string.gsub
+local string_len    = string.len
 local max           = math.max
 local min           = math.min
 local log           = ngx.log
@@ -212,82 +213,6 @@ local function collapse(name, map)
   return load(concat(c), "=" .. name, "t", env)
 end
 
--- local function escape_identifier(connector,ident)
---   return '`' .. (tostring(ident):gsub('"', '""')) .. '`'
--- end
-
--- -- @see pgmoon
--- local function escape_literal(connector,val, field)
---   ngx.log(ngx.ERR,cjson.encode(field))
---   if field.timestamp then
---     return 
---   end
---   local t_val = type(val)
---   if t_val == "number" then
---     return tostring(val)
---   elseif t_val == "string" then
---     return "'" .. tostring((val:gsub("'", "''"))) .. "'"
---   elseif t_val == "boolean" then
---     return val and "TRUE" or "FALSE"
---   elseif t_val == "table" and field and (field.type == "table" or field.type == "array") then
---     return escape_literal(cjson.encode(val))
---   elseif "nil" == _exp_0 then
---     return "''"
---   elseif ngx.null == val then
---     return "''"
---   end
---   error("don't know how to escape value: " .. tostring(val) .. " type:" .. t_val)
--- end
-
--- local function escape_identifier(connector, identifier, field)
---   -- if field then
---   --   if field.timestamp then
---   --     return concat { "UNIX_TIMESTAMP(", identifier, ") AS ", identifier }
---   --   end
---   -- end
-
---   -- return identifier
---   return '`' .. (tostring(identifier):gsub('"', '""')) .. '`'
--- end
-
-
--- local function escape_literal(connector, literal, field)
---   if literal == nil or literal == null or literal == ngx.null then
---     return "''"
---   end
-
---   if field then
---     if field.timestamp then
---       return concat { "FROM_UNIXTIME(", connector:escape_literal(literal), ")"}
---     end
-
---     -- TODO: what about UUID, should it be in some defined format?
-
---     if field.type == "array" or field.type == "set" then
-
---       if not literal[1] then
---         return connector:escape_literal("{}")
---       end
-
---       local elements = field.elements
-
---       if elements.timestamp then
---         local timestamps = {}
---         for i, v in ipairs(literal) do
---           timestamps[i] = concat { "FROM_UNIXTIME(", connector:escape_literal(v), ")"}
---         end
---         return encode_array(timestamps)
---       end
-
---       return encode_array(literal)
-
---     elseif field.type == "map" or field.type == "record" then
---       return encode_json(literal)
---     end
---   end
-
---   return connector:escape_literal(literal)
--- end
 
 local function escape_identifier(connector,ident, field)
   return '`' .. (tostring(ident):gsub('"', '""')) .. '`'
@@ -528,35 +453,19 @@ local function execute(strategy, statement_name, attributes, is_update)
 
     if i == argc and is_update and attributes[UNIQUE] then
       value = attributes[UNIQUE]
-
     else
       value = attributes[name]
-      if value == nil and type(name) == "string" then
-        if type(attributes[gsub(name,"_id","")]) == "table" then
-          value = attributes[gsub(name,"_id","")]["id"]
-          if name == "route_id" then
-            local saml = "SELECT service_id FROM routes WHERE `id`=" ..escape_literal(connector, value)
-            local sinfo,errInfo = connector:query(saml)
-            if sinfo then
-              service_id = sinfo[1]["service_id"]
-            end
-          end
-        end
-      end
     end
 
     if value == nil and is_update then
       argv[i] = escape_identifier(connector, name)
     else
       argv[i] = escape_literal(connector, value, fields[name])
-      if type(name) == "string" and name == "service_id" and not value then
-        argv[i] = escape_literal(connector, service_id)
-      end
     end
   end
 
   local sql = statement.make(argv)
-  if string_len(service_id) > 0 and statement_name == "insert" then
+  if string_len(service_id) > 0 and (statement_name == "insert" or statement_name == "update") then
     sql = concat {
       "BEGIN;\n",
       "SET FOREIGN_KEY_CHECKS=0;\n",
@@ -1030,11 +939,11 @@ function _M.new(connector, schema, errors)
         foreign_key_names[i]   = name
         foreign_key_escaped[i] = name_escaped
         foreign_col_names[i]   = escape_identifier(connector, foreign_field_name)
-        foreign_key_map[i]     = {
+        insert(foreign_key_map,{
           from   = name,
           entity = field_name,
           to     = foreign_field_name
-        }
+        })
       end
 
       foreign_keys[field_name] = {

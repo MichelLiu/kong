@@ -159,11 +159,11 @@ local function query_entity(context, self, db, schema, method)
     args = self.args.uri
   end
   
-  if schema.name == "plugins" and method == "update" then
+  if schema.name == "plugins" and context == "update" then
     args.service_id = nil
     args.route_id = nil
   end
-  ngx.log(ngx.ERR,"extract_options:" .. cjson.encode(args) .. " schema.name:" .. schema.name)
+
   local opts = extract_options(args, schema, context)
   local dao = db[schema.name]
 
@@ -329,7 +329,6 @@ local function post_collection_endpoint(schema, foreign_schema, foreign_field_na
 
     local entity, _, err_t = insert_entity(self, db, schema, method)
     if err_t then
-      ngx.log(ngx.ERR, "post_collection_endpoint err2:" .. tostring(err_t))
       return handle_error(err_t)
     end
 

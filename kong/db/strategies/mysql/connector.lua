@@ -270,7 +270,7 @@ function _mt:query(sql)
             end
           elseif k == 'regex_priority' then
             res[i][k] = tonumber(v)
-          elseif k == 'strip_path' or k == 'preserve_host' then
+          elseif k == 'strip_path' or k == 'preserve_host' or k == 'enabled' then
             res[i][k] = true
             if v == 0 then
               res[i][k] = false
