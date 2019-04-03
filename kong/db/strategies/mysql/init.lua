@@ -213,6 +213,12 @@ local function collapse(name, map)
   return load(concat(c), "=" .. name, "t", env)
 end
 
+local function isjson(field)
+  if field then
+    return field.type == "record" or field.type == "table" or field.type == "array" or field.type == "set"
+  end
+  return false
+end
 
 local function escape_identifier(connector,ident, field)
   return '`' .. (tostring(ident):gsub('"', '""')) .. '`'
@@ -224,7 +230,10 @@ local function escape_literal(connector, val, field)
   if t_val == "nil" then
     return tostring(val)
   end
-  if literal == null or literal == ngx.null then
+  if val == null or val == ngx.null then
+    if isjson(field) then
+      return ngx.quote_sql_str(cjson.encode({}))
+    end
     return "''"
   end
   if field then
@@ -238,7 +247,10 @@ local function escape_literal(connector, val, field)
     elseif t_val == "boolean" then
       return val and "TRUE" or "FALSE"
     elseif t_val == "table" then
-      if field and (field.type == "record" or field.type == "table" or field.type == "array" or field.type == "set") then
+      if isjson(field) then
+        if val == '' then
+          return ngx.quote_sql_str(cjson.encode({}))
+        end
         return connector:escape_literal(cjson.encode(val))
       end
     end
